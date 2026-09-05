@@ -1,0 +1,24 @@
+services:
+  taskboard:
+    build: .
+    image: taskboard:local
+    ports:
+      - "${TASKBOARD_PUBLISH_ADDRESS:-127.0.0.1}:8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - taskboard-data:/data
+    # Images are spooled here while being received, then stored in SQLite.
+    # The container's writable layer provides temporary disk storage without
+    # imposing a separate per-image or tmpfs size cap.
+    restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  taskboard-data:
+

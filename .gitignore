@@ -1,0 +1,14 @@
+/target/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.svelte-kit/
+/data/
+/.env
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+/test-results/
+/playwright-report/
+.DS_Store
+
