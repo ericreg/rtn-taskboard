@@ -57,27 +57,25 @@ docker compose build
 
 The first build downloads dependencies and compiles Rust, so allow several minutes and a few gigabytes of free disk space.
 
-### 3. Issue the gateway credential
+### 3. Seed the database
 
-Run this while the backend service is stopped:
+Run this once while the backend service is stopped. Pass the email and display name as Make variables; the password is prompted for without echoing it or putting it in command history, then passed to the container over standard input:
+
+```sh
+make seed EMAIL="you@company.com" NAME="Your Name"
+```
+
+Omit either variable to be prompted for it, or run `make seed` to enter all three values interactively. The underlying command is `taskboard seed EMAIL [NAME]`, with the password on stdin. It creates the database schema and commits the first editor, a generated backend private key, and the CBOR authority/enrollment state together. Everything is stored in `taskboard.db`; no backend `.key` or `.cbor` files are written. Seeding runs offline and refuses to overwrite an installation that already has users or a backend identity. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
+
+### 4. Issue the gateway credential
+
+With the backend service still stopped, run:
 
 ```sh
 docker compose run --rm backend issue-gateway-code
 ```
 
-Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in `.env`. The code admits one distinct gateway identity. The gateway generates that key on first launch and keeps it in `taskboard-gateway-data`, so preserve that volume across upgrades and restarts.
-
-### 4. Create the first editor
-
-Pass the email and display name as Make variables. The password is always prompted for without echoing it or putting it in your command history, then passed to the container over standard input:
-
-```sh
-make password EMAIL="you@company.com" NAME="Your Name"
-```
-
-Omit either variable to be prompted for it, or run `make password` to enter all three values interactively. This command creates the database and first editor, then exits; despite its name, it does not reset an existing user's password. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
-
-Run bootstrap only once. If an editor already exists, use **Workspace management** in the app to invite additional users and change their roles.
+This connects to the relay using the seeded identity and persists the one-use enrollment grant in SQLite. Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in `.env`. The gateway generates its own key on first launch and keeps it in `taskboard-gateway-data`, so preserve that volume across upgrades and restarts.
 
 ### 5. Start Taskboard
 
@@ -129,8 +127,7 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | `TASKBOARD_DISCORD_TOKEN` | Empty | Optional Discord bot token |
 | `TASKBOARD_DISCORD_GUILD_ID` | Empty | Company Discord server ID; required when a bot token is supplied |
 | `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | SQLite database path |
-| `TASKBOARD_RTN_IDENTITY` | `/data/rtn/...key` | Persistent private endpoint key in each container |
-| `TASKBOARD_RTN_STATE` | `/data/rtn/backend.cbor` | Backend authority, grants, and redeemed membership state |
+| `TASKBOARD_RTN_IDENTITY` | `/data/rtn/gateway.key` in the gateway image | Gateway-only private endpoint key; backend key and enrollment state live in SQLite |
 | `TASKBOARD_GATEWAY_BIND` | `127.0.0.1:8080` in Compose; `0.0.0.0:8080` in the image | Gateway HTTP listener; Compose derives this from `TASKBOARD_PUBLISH_ADDRESS` and port 8080 |
 | `RUST_LOG` | See `.env.example` | Application logging filter |
 
@@ -228,7 +225,7 @@ Database timestamps and calculated deadline instants are stored in UTC. Each acc
 
 ## Data and manual backups
 
-Both backend Compose configurations bind-mount **`./data:/data`**. The SQLite database is `./data/taskboard.db` on the host, alongside its SQLite sidecar files and `./data/rtn` backend identity/enrollment state. This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
+Both backend Compose configurations bind-mount **`./data:/data`**. The SQLite database is `./data/taskboard.db` on the host, alongside its SQLite sidecar files. The `rtn_identity` table contains the backend private key and CBOR authority, grants, and redeemed membership state as BLOBs. Seed and startup keep the database and its sidecars private (`0600` on Unix). This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
 
 ### Changing the container user
 
@@ -240,7 +237,7 @@ Changing the runtime user does not change existing file ownership. When upgradin
 export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
 docker compose -f compose.backend.yaml stop backend
 sudo chown -R "$TASKBOARD_UID:$TASKBOARD_GID" ./data
-sudo chmod 0700 ./data ./data/rtn
+sudo chmod 0700 ./data
 docker compose -f compose.backend.yaml up -d --build backend
 ```
 
@@ -257,7 +254,7 @@ docker run --rm --network none --user 0:0 \
 docker compose -f compose.gateway.yaml up -d --build gateway
 ```
 
-Only the one-off ownership helper runs as root; the application services run as your user. Keep the `rtn` directory mode at `0700` and key files private. No new join code or database reset is needed.
+Only the one-off ownership helper runs as root; the application services run as your user. Keep backend data private and the gateway’s `rtn` directory at `0700` with private key files. No new join code or database reset is needed.
 
 Rebuilding images or using `docker compose down` preserves this data. `docker compose down -v` does not delete the bind-mounted host directory, but **does delete the gateway's named volume and enrolled identity**.
 
@@ -275,11 +272,11 @@ After the copy succeeds, on Linux set ownership for the non-root backend and rec
 
 ```sh
 sudo chown -R "$(id -u):$(id -g)" ./data
-sudo chmod 0700 ./data ./data/rtn
+sudo chmod 0700 ./data
 docker compose -f compose.backend.yaml up -d backend
 ```
 
-Use `compose.yaml` instead for the combined deployment. This preserves the database, SQLite sidecars, and backend identity/enrollment state; no new join code is needed. The old named volume is not removed and remains available for recovery. If the old container has already been removed, recover from its named volume before starting the new backend; do not initialize an empty directory over an existing installation.
+Use `compose.yaml` instead for the combined deployment. This preserves the complete database and SQLite sidecars; database-backed identities need no new join code. Installations that still store backend identity/enrollment state in separate files need an explicit migration before using this version; those files are not imported automatically. The old named volume is not removed and remains available for recovery. If the old container has already been removed, recover from its named volume before starting the new backend; do not initialize an empty directory over an existing installation.
 
 Backup scheduling and retention are yours to manage. For a simple consistent manual copy, stop the app, copy the complete data directory into a new timestamped destination, then start it again:
 
@@ -302,8 +299,8 @@ docker compose exec backend /taskboard invalidate-sessions
 ## Troubleshooting
 
 - **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove either Taskboard data volume. Do not use Docker Desktop's **Clean / Purge data** option if a volume contains data you need.
-- **First-editor setup reports an existing editor:** bootstrap has already run against this volume. Sign in to that account and use Workspace management for invitations or password reset links.
-- **The app says it needs setup:** run the bootstrap command against the same Compose project and volume as the server.
+- **Seed reports an initialized database:** users or a backend identity already exist. Seed never resets an account or rotates an existing identity. Sign in to the existing account and use Workspace management for invitations or password reset links.
+- **The backend says it is not seeded:** run `make seed` against the same database before first startup. Older installations with separate backend key/state files require an explicit migration; startup does not import them, and seed will not overwrite their users.
 - **Sign-in or editing fails with a permission error:** if the error says the gateway rejected the browser origin, set `TASKBOARD_GATEWAY_ORIGIN` on the gateway machine to the URL you visit (including scheme and port), then recreate the gateway. Changing the backend's `TASKBOARD_BASE_URL` does not change this policy. For HTTP, secure cookies must be disabled on the backend.
 - **The threshold does not change after editing `.env`:** change it in Workspace management; the environment value initializes new databases only.
 - **Port 8080 is already in use:** stop the conflicting service or change the gateway listener port in Compose and update `TASKBOARD_GATEWAY_ORIGIN` to match the browser URL. Update `TASKBOARD_BASE_URL` too if generated links should use that URL. Host networking has no separate published/container ports.

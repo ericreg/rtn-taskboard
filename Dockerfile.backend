@@ -11,13 +11,13 @@ COPY wire/ ./wire/
 RUN --mount=type=cache,id=taskboard-cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=taskboard-cargo-target,sharing=locked,target=/build/rtn-taskboard/target \
     cargo build --release --locked -p taskboard && \
-    mkdir -p /out /runtime/data/rtn /runtime/tmp && \
+    mkdir -p /out /runtime/data /runtime/tmp && \
     cp target/release/taskboard /out/taskboard && \
     if readelf -l /out/taskboard | grep -q INTERP; then echo 'Binary must be statically linked'; exit 1; fi
 ARG TASKBOARD_UID=10001
 ARG TASKBOARD_GID=10001
 RUN chown -R ${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/data /runtime/tmp && \
-    chmod 0700 /runtime/data/rtn && chmod 1777 /runtime/tmp
+    chmod 0700 /runtime/data && chmod 1777 /runtime/tmp
 
 FROM scratch AS runtime
 ARG TASKBOARD_UID=10001
@@ -29,8 +29,6 @@ COPY --from=builder --chown=${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/tmp /tmp
 USER ${TASKBOARD_UID}:${TASKBOARD_GID}
 ENV TASKBOARD_DATABASE=/data/taskboard.db \
     TASKBOARD_MAX_IMAGE_MIB=10 \
-    TASKBOARD_RTN_IDENTITY=/data/rtn/backend.key \
-    TASKBOARD_RTN_STATE=/data/rtn/backend.cbor \
     TASKBOARD_RTN_RELAY_ONLY=true
 VOLUME ["/data"]
 ENTRYPOINT ["/taskboard"]

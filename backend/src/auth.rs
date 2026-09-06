@@ -51,13 +51,16 @@ pub async fn verify_password(state: &AppState, password: String, hash: String) -
 pub async fn get_user(state: &AppState, id: i64) -> Result<User> {
     sqlx::query_as::<_,User>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id=?")).bind(id).fetch_optional(&state.pool).await?.ok_or_else(Error::missing)
 }
-pub async fn bootstrap(state: &AppState, email: &str, name: &str, password: &str) -> Result<()> {
+pub async fn seed(state: &AppState, email: &str, name: &str, password: &str) -> Result<()> {
     let email = normalize_email(email)?; let name = valid_name(name)?;
     let hash = hash_password(state, password).await?;
-    let _guard = state.writes.lock().await; let mut tx = state.pool.begin().await?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role='editor'").fetch_one(&mut *tx).await?;
-    if count > 0 { return Err(Error::bad("An editor already exists. Use Workspace management to invite more people.")); }
+    let _guard = state.writes.lock().await; let mut tx = state.pool.begin_with("BEGIN IMMEDIATE").await?;
+    let count: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM rtn_identity)").fetch_one(&mut *tx).await?;
+    if count > 0 { return Err(Error::bad("The database is already initialized. Seed only runs on an empty installation.")); }
     sqlx::query("INSERT INTO users(email,password_hash,name,role,timezone) VALUES(?,?,?,'editor','UTC')").bind(email).bind(hash).bind(name).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO rtn_identity(id,private_key,host_state) VALUES(1,?,?)")
+        .bind(rtn_mq::Identity::generate().to_bytes().as_slice())
+        .bind(rtn_mq::generate_host_state()).execute(&mut *tx).await?;
     tx.commit().await?; Ok(())
 }
 pub fn session_cookie(state: &AppState, token: &str, expired: bool) -> String {

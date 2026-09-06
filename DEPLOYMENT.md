@@ -11,7 +11,7 @@ Only `/api/v1` is tunneled. Static frontend assets and SPA routes stay at the ga
 
 ## What is authenticated
 
-The backend creates and persists an Iroh endpoint identity, a realm authority, the one-use join grant, and the gateway membership it issued. The gateway creates its own private endpoint key on first startup and persists it separately.
+The backend seed command creates an Iroh endpoint identity and realm authority in SQLite. Later join grants and issued gateway memberships are persisted in the same database. The gateway creates its own private endpoint key on first startup and persists it separately.
 
 The join code is a bearer enrollment credential, but it is not used to sign application traffic. Successful enrollment binds the one permitted use to the gateway's public key. Every later `rtn-mq` message is signed by that key and checked against its certificate and exact topic permissions:
 
@@ -78,27 +78,24 @@ mkdir -p ./data
 
 For an existing named-volume installation, follow [the migration instructions](README.md#migrating-an-existing-backend-named-volume) first; an empty bind mount will not automatically import the old database or identity.
 
-Build the image, then issue the credential while the backend service is stopped:
+Build the image, then seed the database while the backend service is stopped:
 
 ```sh
 docker compose -f compose.backend.yaml build
-docker compose -f compose.backend.yaml run --rm backend issue-gateway-code
+make seed EMAIL="you@company.com" NAME="Your Name"
 ```
 
-Keep the printed `rtn-mq://join/...` value private. This command also initializes persistent backend identity and enrollment state in `./data/rtn`. Do not run a second copy of the command against that directory while the backend is running.
+`make seed` prompts for the editor password. It initializes the schema, then commits the initial editor, backend private key, and CBOR authority/enrollment state in `./data/taskboard.db` together. It runs offline, writes no backend `.key` or `.cbor` files, and refuses to overwrite existing users or identity state. Startup requires this seeded identity; it does not import old files or silently generate new credentials.
 
-Bootstrap the first editor, then start the backend:
+Issue the gateway code and start the backend:
 
 ```sh
-bash -c '
-  read -r -s -p "Editor password (at least 15 characters): " taskboard_password
-  printf "\n" >&2
-  printf "%s\n" "$taskboard_password"
-' | docker compose -f compose.backend.yaml run --rm -T backend bootstrap you@company.com "Your Name"
-
+docker compose -f compose.backend.yaml run --rm backend issue-gateway-code
 docker compose -f compose.backend.yaml up -d
 docker compose -f compose.backend.yaml ps
 ```
+
+Keep the printed `rtn-mq://join/...` value private. Issuing a code requires relay connectivity and saves the grant in SQLite. Run only one backend transport process against the database at a time, including `issue-gateway-code`.
 
 There is deliberately no `ports` entry and no HTTP listener inside the backend container. API requests can reach its in-process router only after arriving as authenticated tunnel frames. `TASKBOARD_RTN_RELAY_ONLY=true` also prevents Iroh from accepting a direct-IP data path.
 
@@ -136,9 +133,9 @@ When upgrading from backend-wide origin validation, rebuild and recreate both se
 - Gateway readiness requires both tunnel topic subscriptions, not just a connected peer. A new API request waits up to eight seconds for subscriptions to recover, then returns `503` if they are still unavailable. Static assets remain available. The existing concurrency limit also bounds requests waiting for recovery.
 - The gateway only retries a request-start publication when `rtn-mq` explicitly reports that no subscriber accepted it. Once a publication is accepted, acknowledgement failures do not trigger a fresh HTTP request or replay; the messaging layer retains its existing delivery semantics.
 - A connection loss can make the outcome of an in-flight write unknown after the backend accepted its frames. `rtn-mq` prevents message forgery and duplicate frame delivery, but it does not turn Taskboard CRUD operations into a cross-process transaction. Reconcile state before manually repeating a write that ended in `503`.
-- Back up the backend host's `./data` directory, including `taskboard.db`, SQLite sidecars, and `rtn`. Back up the gateway `/data/rtn` identity independently.
+- Back up the backend host's `./data` directory, including `taskboard.db` and SQLite sidecars. The database contains the backend key and enrollment state. Back up the gateway `/data/rtn` identity independently.
 - Never copy the gateway identity into a second running gateway. The current protocol intentionally supports one global gateway for this code and expects exactly one response recipient.
-- Issuing another code does not revoke an existing gateway certificate. If the gateway private key is suspected compromised, take the deployment offline and replace the backend `rtn` authority/enrollment state and gateway identity together, then issue a new code. Preserve the SQLite database.
+- Issuing another code does not revoke an existing gateway certificate. If the gateway private key is suspected compromised, take the deployment offline and rotate the backend `rtn_identity` credentials and gateway identity together before issuing a new code. Preserve the application tables; `seed` deliberately refuses to reset an existing installation.
 
 ### Diagnosing disconnects
 

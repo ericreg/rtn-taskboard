@@ -18,7 +18,7 @@ pub struct StorageStatus {
 }
 impl AppState {
     pub async fn new(config: Config) -> anyhow::Result<Self> {
-        if let Some(parent) = config.database.parent().filter(|p| !p.as_os_str().is_empty()) { tokio::fs::create_dir_all(parent).await?; }
+        prepare_database(&config.database)?;
         let options = SqliteConnectOptions::new().filename(&config.database).create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal).foreign_keys(true).auto_vacuum(SqliteAutoVacuum::Full)
             .busy_timeout(Duration::from_secs(15));
@@ -63,6 +63,42 @@ impl AppState {
         if *count > allowed { return Err(Error(axum::http::StatusCode::TOO_MANY_REQUESTS, "rate_limit", "Too many attempts. Try again in 15 minutes.".into())); }
         Ok(())
     }
+}
+fn prepare_database(path: &std::path::Path) -> anyhow::Result<()> {
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        directory.create(parent)?;
+    }
+    // The database now contains transport private keys as well as user credentials.
+    // Restrict existing sidecars too, before any key material can reach the WAL.
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file_path = path.as_os_str().to_os_string();
+        file_path.push(suffix);
+        match std::fs::symlink_metadata(&file_path) {
+            Ok(metadata) => {
+                anyhow::ensure!(metadata.is_file() && !metadata.file_type().is_symlink(), "Database and sidecars must be regular files");
+                #[cfg(unix)] {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o600))?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?;
+    Ok(())
 }
 pub async fn database_size(conn: &mut SqliteConnection) -> Result<u64> {
     let pages: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(&mut *conn).await?;

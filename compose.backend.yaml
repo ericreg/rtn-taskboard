@@ -19,8 +19,6 @@ services:
       TASKBOARD_DISCORD_TOKEN: ${TASKBOARD_DISCORD_TOKEN:-}
       TASKBOARD_DISCORD_GUILD_ID: ${TASKBOARD_DISCORD_GUILD_ID:-}
       TASKBOARD_DATABASE: /data/taskboard.db
-      TASKBOARD_RTN_IDENTITY: /data/rtn/backend.key
-      TASKBOARD_RTN_STATE: /data/rtn/backend.cbor
       TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
       RUST_LOG: ${RUST_LOG:-taskboard=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn}
     volumes:

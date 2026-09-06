@@ -9,8 +9,8 @@ struct Fixture{state:AppState,admin:Session,_dir:tempfile::TempDir}
 #[derive(Clone)]struct Session{cookie:String,csrf:String,id:i64}
 impl Fixture{
     async fn new()->Self{
-        let dir=tempfile::tempdir().unwrap();let state=AppState::new(Config{database:dir.path().join("taskboard.db"),base_url:"http://localhost:8080".into(),max_db_bytes:0,max_image_bytes:10*1024*1024,secure_cookies:false,discord_token:None,discord_guild:None,rtn_identity:dir.path().join("rtn/backend.key"),rtn_state:dir.path().join("rtn/backend.cbor"),rtn_relay_only:false}).await.unwrap();
-        auth::bootstrap(&state,"admin@example.test","Alex","a long test-only passphrase").await.unwrap();
+        let dir=tempfile::tempdir().unwrap();let state=AppState::new(Config{database:dir.path().join("taskboard.db"),base_url:"http://localhost:8080".into(),max_db_bytes:0,max_image_bytes:10*1024*1024,secure_cookies:false,discord_token:None,discord_guild:None,rtn_relay_only:false}).await.unwrap();
+        auth::seed(&state,"admin@example.test","Alex","a long test-only passphrase").await.unwrap();
         let (token,csrf)=auth::new_session(&state,1).await.unwrap();
         Self{state,admin:Session{cookie:format!("taskboard_session={token}"),csrf,id:1},_dir:dir}
     }

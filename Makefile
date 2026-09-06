@@ -1,4 +1,4 @@
-.PHONY: start-gateway stop-gateway start-backend stop-backend join-code password prepare-data
+.PHONY: start-gateway stop-gateway start-backend stop-backend join-code seed prepare-data
 
 # Compose cannot determine the invoking host user on its own.
 export TASKBOARD_UID := $(shell id -u)
@@ -27,9 +27,9 @@ prepare-data:
 join-code: prepare-data
 	docker compose run --rm backend issue-gateway-code
 
-password: export TASKBOARD_EDITOR_EMAIL = $(value EMAIL)
-password: export TASKBOARD_EDITOR_NAME = $(value NAME)
-password: prepare-data
+seed: export TASKBOARD_EDITOR_EMAIL = $(value EMAIL)
+seed: export TASKBOARD_EDITOR_NAME = $(value NAME)
+seed: prepare-data
 	@bash -eu -o pipefail -c '\
 	taskboard_email="$${TASKBOARD_EDITOR_EMAIL:-}"; \
 	taskboard_name="$${TASKBOARD_EDITOR_NAME:-}"; \
@@ -40,4 +40,4 @@ password: prepare-data
 	fi; \
 	read -r -s -p "Editor password (at least 15 characters): " taskboard_password; \
 	printf "\n" >&2; \
-	printf "%s\n" "$$taskboard_password" | docker compose -f compose.backend.yaml run --rm -T backend bootstrap "$$taskboard_email" "$$taskboard_name"'
+	printf "%s\n" "$$taskboard_password" | docker compose -f compose.backend.yaml run --rm -T backend seed "$$taskboard_email" "$$taskboard_name"'

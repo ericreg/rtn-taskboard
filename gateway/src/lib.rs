@@ -670,13 +670,11 @@ mod tests {
             secure_cookies: false,
             discord_token: None,
             discord_guild: None,
-            rtn_identity: directory.path().join("backend.key"),
-            rtn_state: directory.path().join("backend.cbor"),
             rtn_relay_only: false,
         })
         .await
         .unwrap();
-        auth::bootstrap(
+        auth::seed(
             &backend_state,
             "admin@example.test",
             "Admin",

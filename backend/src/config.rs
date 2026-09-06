@@ -27,8 +27,6 @@ pub struct Config {
     pub secure_cookies: bool,
     pub discord_token: Option<String>,
     pub discord_guild: Option<u64>,
-    pub rtn_identity: PathBuf,
-    pub rtn_state: PathBuf,
     pub rtn_relay_only: bool,
 }
 impl Config {
@@ -50,8 +48,6 @@ impl Config {
             base_url,
             discord_token: token,
             discord_guild: guild,
-            rtn_identity: get("TASKBOARD_RTN_IDENTITY", "data/rtn/backend.key").into(),
-            rtn_state: get("TASKBOARD_RTN_STATE", "data/rtn/backend.cbor").into(),
             rtn_relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "true").parse().context("Invalid TASKBOARD_RTN_RELAY_ONLY")?,
         })
     }
