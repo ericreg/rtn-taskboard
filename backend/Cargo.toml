@@ -11,14 +11,19 @@ axum = { version = "0.8", features = ["multipart", "macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 futures-util = "0.3"
+http-body-util = "0.1"
 rand = "0.8"
+rtn-mq = { path = "../../rtn-mq" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serenity = { version = "0.12", default-features = false, features = ["builder", "client", "gateway", "model", "rustls_backend"] }
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+tokio-stream = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "set-header"] }
+taskboard-wire = { path = "../wire" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
@@ -26,5 +31,3 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }

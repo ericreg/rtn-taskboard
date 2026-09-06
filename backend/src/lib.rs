@@ -7,4 +7,6 @@ pub mod services;
 pub mod http;
 pub mod jobs;
 pub mod discord;
+pub mod mesh;
+pub mod tunnel;
 

@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead};
 use taskboard::{auth, config::Config, state::AppState};
 
 #[tokio::main]
@@ -6,15 +6,12 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "taskboard=info,tower_http=info".into())).init();
     let args: Vec<String> = std::env::args().collect();
     let config = Config::from_env()?;
-    if args.get(1).map(String::as_str) == Some("healthcheck") {
-        let port = config.bind.rsplit(':').next().unwrap_or("8080");
-        let address = format!("127.0.0.1:{port}").parse()?;
-        let mut socket = std::net::TcpStream::connect_timeout(&address,std::time::Duration::from_secs(3))?;
-        socket.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
-        socket.write_all(b"GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
-        let mut response = [0u8;128]; let count = socket.read(&mut response)?;
-        anyhow::ensure!(String::from_utf8_lossy(&response[..count]).starts_with("HTTP/1.1 200"),"Application is not ready");
+    if args.get(1).map(String::as_str) == Some("issue-gateway-code") {
+        println!("{}",taskboard::mesh::issue_gateway_code(&config).await?);
         return Ok(());
+    }
+    if args.get(1).is_some_and(|command| !matches!(command.as_str(), "bootstrap" | "invalidate-sessions" | "status")) {
+        anyhow::bail!("Unknown command: {}", args[1]);
     }
     let state = AppState::new(config).await?;
     if args.get(1).map(String::as_str) == Some("bootstrap") {
@@ -35,14 +32,20 @@ async fn main() -> anyhow::Result<()> {
     }
     let jobs = tokio::spawn(taskboard::jobs::run(state.clone()));
     let discord = state.config.discord_token.as_ref().map(|_| tokio::spawn(taskboard::discord::run(state.clone())));
-    let listener = tokio::net::TcpListener::bind(&state.config.bind).await?;
-    tracing::info!(address = %state.config.bind, "Taskboard ready");
-    axum::serve(listener, taskboard::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .with_graceful_shutdown(shutdown()).await?;
+    let mesh=taskboard::mesh::backend(&state.config).await?;
+    mesh.online(std::time::Duration::from_secs(30)).await?;
+    let mut tunnel=tokio::spawn(taskboard::tunnel::run(mesh.clone(),state.clone()));
+    tracing::info!(endpoint = %mesh.endpoint_id(), "Taskboard backend ready");
+    let outcome=tokio::select!{
+        _=shutdown()=>Ok(()),
+        result=&mut tunnel=>match result{Ok(Ok(()))=>Err(anyhow::anyhow!("Taskboard tunnel stopped unexpectedly")),Ok(Err(error))=>Err(error),Err(error)=>Err(error.into())},
+    };
     jobs.abort();
+    tunnel.abort();
     if let Some(discord) = discord { discord.abort(); }
+    let _=mesh.shutdown(rtn_mq::ShutdownMode::Drain{timeout:std::time::Duration::from_secs(10)}).await;
     state.pool.close().await;
-    Ok(())
+    outcome
 }
 
 async fn shutdown() {

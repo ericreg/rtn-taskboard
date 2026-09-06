@@ -6,7 +6,7 @@ mod settings;
 
 use crate::{error::Error, state::AppState};
 use axum::{Router, extract::{DefaultBodyLimit, Request, State}, http::{HeaderValue, Method, header}, middleware::{self, Next}, response::{IntoResponse, Response}, routing::{get,post,patch,put,delete}};
-use tower_http::{services::{ServeDir, ServeFile}, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
@@ -47,11 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/discord/confirm",post(settings::confirm_link))
         .route("/me/discord",delete(settings::unlink_discord))
         .fallback(|| async { Error::missing() });
-    let static_files = ServeDir::new(&state.config.frontend).not_found_service(ServeFile::new(state.config.frontend.join("index.html")));
     Router::new().nest("/api/v1",api)
-        .route("/health/live",get(|| async { "ok" }))
-        .route("/health/ready",get(|State(s): State<AppState>| async move { sqlx::query("SELECT 1").execute(&s.pool).await.map(|_| "ok").map_err(Error::from) }))
-        .fallback_service(static_files)
         .layer(DefaultBodyLimit::max(1024*1024))
         .layer(middleware::from_fn_with_state(state.clone(),security))
         .layer(TraceLayer::new_for_http())
@@ -71,4 +67,3 @@ async fn security(State(state): State<AppState>, request: Request, next: Next) -
     if api { headers.insert(header::CACHE_CONTROL,HeaderValue::from_static("no-store")); }
     response
 }
-

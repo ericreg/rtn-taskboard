@@ -1,10 +1,15 @@
 # Taskboard
 
-A self-hosted project management app built with Svelte, TypeScript, Rust, and SQLite. The Rust backend serves the compiled frontend and runs the optional Discord bot in **one container**. The production image uses `FROM scratch` and runs as a non-root user.
+A self-hosted project management app built with Svelte, TypeScript, Rust, SQLite, and `rtn-mq`. It deploys as two non-root `scratch` containers:
+
+- The public **gateway** serves the compiled frontend and forwards same-origin `/api/v1` requests.
+- The private **backend** owns SQLite, authorization, jobs, and the optional Discord bot. It has no HTTP listener or published port.
+
+The containers exchange signed, acknowledged, streaming frames over an Iroh relay. The browser uses ordinary HTTPS, cookies, and CSRF protection; it never receives the join code or an Iroh key. See [Split deployment](DEPLOYMENT.md) for the remote-server setup and security model.
 
 ## Quick start
 
-You need Docker running and a recent Docker Compose V2 installation. Docker Desktop includes both. Run these commands from the repository root.
+For a local split deployment, put `rtn-taskboard` and `rtn-mq` beside each other, then run these commands from the Taskboard repository. You need Docker and a recent Docker Compose V2 with additional build-context support.
 
 ### 1. Create your configuration
 
@@ -19,6 +24,7 @@ TASKBOARD_BASE_URL=http://localhost:8080
 TASKBOARD_SECURE_COOKIES=false
 TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
 TASKBOARD_MAX_DB_GIB=0
+TASKBOARD_MAX_IMAGE_MIB=10
 ```
 
 Discord is optional. Leave its token and server ID empty unless you want to enable the bot.
@@ -29,9 +35,19 @@ Discord is optional. Leave its token and server ID empty unless you want to enab
 docker compose build
 ```
 
-The first build downloads dependencies and compiles Rust, so allow several minutes and a few gigabytes of free disk space. Subsequent builds reuse caches. Rebuild from the current source even if a `taskboard:local` image already exists from development.
+The first build downloads dependencies and compiles Rust, so allow several minutes and a few gigabytes of free disk space.
 
-### 3. Create the first editor
+### 3. Issue the gateway credential
+
+Run this while the backend service is stopped:
+
+```sh
+docker compose run --rm backend issue-gateway-code
+```
+
+Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in `.env`. The code admits one distinct gateway identity. The gateway generates that key on first launch and keeps it in `taskboard-gateway-data`, so preserve that volume across upgrades and restarts.
+
+### 4. Create the first editor
 
 Replace the email and display name below. This Bash command prompts for the password without echoing it or putting it in your command history, then passes it to the container over standard input:
 
@@ -40,19 +56,19 @@ bash -c '
   read -r -s -p "Editor password (at least 15 characters): " taskboard_password
   printf "\n" >&2
   printf "%s\n" "$taskboard_password"
-' | docker compose run --rm -T taskboard bootstrap you@company.com "Your Name"
+' | docker compose run --rm -T backend bootstrap you@company.com "Your Name"
 ```
 
 The command creates the database and first editor, then exits. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
 
 Run bootstrap only once. If an editor already exists, use **Workspace management** in the app to invite additional users and change their roles.
 
-### 4. Start Taskboard
+### 5. Start Taskboard
 
 ```sh
 docker compose up -d
 docker compose ps
-docker compose logs -f taskboard
+docker compose logs -f backend gateway
 ```
 
 Open **[http://localhost:8080](http://localhost:8080)** and sign in with the account you created. Press `Ctrl+C` to stop following the logs; the container keeps running.
@@ -67,59 +83,56 @@ Taskboard has two roles. Viewers can browse all projects and tasks and manage th
 | --- | --- |
 | Start | `docker compose up -d` |
 | Stop | `docker compose stop` |
-| Restart | `docker compose restart taskboard` |
-| Follow logs | `docker compose logs -f taskboard` |
+| Restart | `docker compose restart backend gateway` |
+| Follow logs | `docker compose logs -f backend gateway` |
 | Check container health | `docker compose ps` |
-| Run the application health check | `docker compose exec taskboard /taskboard healthcheck` |
-| Report database size and threshold | `docker compose exec taskboard /taskboard status` |
+| Check the public gateway | `docker compose exec gateway /taskboard-gateway healthcheck` |
+| Report database size and threshold | `docker compose exec backend /taskboard status` |
 | Rebuild after source changes | `docker compose up -d --build` |
 | Apply changes to `.env` | `docker compose up -d --force-recreate` |
-| Remove the container, keeping its data | `docker compose down` |
+| Remove the containers, keeping data | `docker compose down` |
 
-The scratch image has no shell, package manager, Node runtime, or SQLite command-line tool. Run `/taskboard` subcommands directly with `docker compose exec`; `sh` and `bash` are not available inside it.
+The scratch images have no shell, package manager, Node runtime, or SQLite CLI. Run their binaries directly with `docker compose exec`.
 
 ## Configuration
 
-Compose reads `.env` and supplies it to the container.
+Compose reads `.env` for interpolation and passes only the explicitly listed values to the appropriate container. Backend-only settings such as the Discord token are not placed in the gateway environment.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TASKBOARD_BASE_URL` | `http://localhost:8080` | Exact browser origin, including scheme and port; also used in invitation and Discord links |
 | `TASKBOARD_SECURE_COOKIES` | `false` in the example | Use `false` for local HTTP; set `true` when serving the app over HTTPS |
 | `TASKBOARD_PUBLISH_ADDRESS` | `127.0.0.1` | Host interface on which Compose publishes port 8080 |
+| `TASKBOARD_RTN_JOIN_CODE` | Required by gateway | One-use enrollment secret; it never enters browser assets |
+| `TASKBOARD_RTN_JOIN_CODE_FILE` | Empty | Alternative file containing the join code, useful with a mounted secret |
+| `TASKBOARD_RTN_RELAY_ONLY` | `true` | Disables all direct-IP Iroh transport; use the configured/default relay only |
 | `TASKBOARD_MAX_DB_GIB` | `0` | Initial database content threshold in whole GiB; `0` means unlimited |
+| `TASKBOARD_MAX_IMAGE_MIB` | `10` | Maximum size of one uploaded image in whole MiB; must be greater than zero |
 | `TASKBOARD_DISCORD_TOKEN` | Empty | Optional Discord bot token |
 | `TASKBOARD_DISCORD_GUILD_ID` | Empty | Company Discord server ID; required when a bot token is supplied |
 | `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | SQLite database path |
-| `TASKBOARD_FRONTEND` | `/www` in the image | Compiled frontend directory |
-| `TASKBOARD_BIND` | `0.0.0.0:8080` | HTTP listener inside the container |
-| `RUST_LOG` | `taskboard=info,tower_http=info` | Application logging filter |
+| `TASKBOARD_RTN_IDENTITY` | `/data/rtn/...key` | Persistent private endpoint key in each container |
+| `TASKBOARD_RTN_STATE` | `/data/rtn/backend.cbor` | Backend authority, grants, and redeemed membership state |
+| `TASKBOARD_GATEWAY_BIND` | `0.0.0.0:8080` | Public gateway HTTP listener inside its container |
+| `RUST_LOG` | See `.env.example` | Application logging filter |
 
-Keep the last three path/listener settings at their container defaults unless you also adjust the volume or port configuration.
+Keep the path/listener settings at their container defaults unless you also adjust the volume or port configuration. The backend has no HTTP bind setting or HTTP listener; its only application transport is the authenticated `rtn-mq` tunnel.
 
-### Access from another machine
+### Public DNS and HTTPS
 
-For example, if your host's LAN address is `192.168.1.50`, set:
+Point the website DNS name at the gateway host and terminate TLS there (or in a reverse proxy in front of port 8080). Configure both deployments with the exact public origin:
 
 ```dotenv
-TASKBOARD_PUBLISH_ADDRESS=0.0.0.0
-TASKBOARD_BASE_URL=http://192.168.1.50:8080
-TASKBOARD_SECURE_COOKIES=false
+TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
+TASKBOARD_BASE_URL=https://tasks.example.com
+TASKBOARD_SECURE_COOKIES=true
 ```
 
-Then recreate the container and open that exact address:
-
-```sh
-docker compose up -d --force-recreate
-```
-
-If you provide HTTPS through your own reverse proxy, set the base URL to your HTTPS origin and enable secure cookies. Taskboard itself listens for HTTP inside the container.
-
-The browser URL must match `TASKBOARD_BASE_URL`. For example, using `127.0.0.1` in the browser while the configured origin is `localhost` can cause write requests to be rejected by origin protection.
+The DNS and TLS configuration is only for browsers reaching the gateway. The backend needs outbound relay access but no public IP, DNS record, inbound port, Docker port mapping, or firewall rule. The browser URL must exactly match `TASKBOARD_BASE_URL`, or origin-protected write requests will be rejected.
 
 ## Storage threshold and images
 
-Images are stored **inside SQLite**, in chunks alongside their attachment metadata. They count toward the database threshold. There is no separate application-level image-size cap; uploads remain subject to the configured database threshold, available disk space, and underlying system limits.
+Images are stored **inside SQLite**, in chunks alongside their attachment metadata. They count toward the database threshold. Each image is also limited by the backend's `TASKBOARD_MAX_IMAGE_MIB` setting, which defaults to 10 MiB and is checked against the image bytes rather than multipart overhead.
 
 To start a fresh database with a 1 GiB threshold:
 
@@ -130,6 +143,7 @@ TASKBOARD_MAX_DB_GIB=1
 **This environment variable seeds the setting only when the database is first initialized.** After that, change the persistent threshold in **Workspace management → Storage, under your control**. The UI uses MiB; enter `0` for unlimited. Changing the environment variable alone will not replace an existing saved threshold.
 
 - The threshold measures SQLite's allocated pages, including images and application records.
+- The per-image limit is container configuration. Change `TASKBOARD_MAX_IMAGE_MIB` and recreate the backend container to update it.
 - Creating content or enlarging task/project text is blocked when storage is full. Content writes that would cross the threshold are rolled back.
 - Viewing, signing in, changing task status, archiving, and permanently deleting tasks remain available.
 - Remove images, permanently delete archived tasks, or raise the threshold to recover space. Moving a task to Archive preserves its content and does not free that space.
@@ -158,7 +172,7 @@ Taskboard requires a **Discord bot** for slash commands and direct-message notif
    docker compose up -d --force-recreate
    ```
 
-6. Check the connection in **Workspace management**. You can inspect the container logs with `docker compose logs -f taskboard`.
+6. Check the connection in **Workspace management**. You can inspect the container logs with `docker compose logs -f backend`.
 7. In **Taskboard → Settings → Discord**, generate a linking code. Run the displayed `/taskboard link` command in your Discord server, then return to Taskboard to confirm your Discord identity.
 8. Try `/taskboard list` in Discord to verify the connection and account link. Each teammate must link their own Taskboard account before using the commands.
 
@@ -193,7 +207,7 @@ Database timestamps and calculated deadline instants are stored in UTC. Each acc
 
 ## Data and manual backups
 
-The Compose named volume **`taskboard-data`** holds `/data/taskboard.db` and any SQLite sidecar files. Compose prefixes the actual volume name with the project name. Projects, tasks, accounts, images, and saved settings all live in that database.
+The Compose named volume **`taskboard-backend-data`** holds `/data/taskboard.db`, its SQLite sidecar files, and `/data/rtn` backend identity/enrollment state. The separate **`taskboard-gateway-data`** volume holds the enrolled gateway identity. Compose prefixes actual volume names with the project name. This split deployment is a forward-only change and does not automatically adopt the old combined-container volume.
 
 Rebuilding the image or using `docker compose down` preserves the named volume. **`docker compose down -v` deletes it and its application data.**
 
@@ -202,9 +216,9 @@ Backup scheduling and retention are yours to manage. For a simple consistent man
 ```sh
 taskboard_backup_dir="backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$taskboard_backup_dir"
-docker compose stop taskboard
-docker compose cp taskboard:/data "$taskboard_backup_dir/"
-docker compose start taskboard
+docker compose stop backend
+docker compose cp backend:/data "$taskboard_backup_dir/"
+docker compose start backend
 ```
 
 The copy is under `$taskboard_backup_dir/data/`. It contains credentials and company content, so keep it private. Do not copy only the main database file while the application is writing to it.
@@ -212,30 +226,31 @@ The copy is under `$taskboard_backup_dir/data/`. It contains credentials and com
 After restoring an older backup, reconcile account access and content changes since that backup. You can invalidate saved sessions and outstanding invitation/reset/link tokens with:
 
 ```sh
-docker compose exec taskboard /taskboard invalidate-sessions
+docker compose exec backend /taskboard invalidate-sessions
 ```
 
 ## Troubleshooting
 
-- **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove the `taskboard-data` volume. Do not use Docker Desktop's **Clean / Purge data** option if the volume contains data you need.
+- **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove either Taskboard data volume. Do not use Docker Desktop's **Clean / Purge data** option if a volume contains data you need.
 - **First-editor setup reports an existing editor:** bootstrap has already run against this volume. Sign in to that account and use Workspace management for invitations or password reset links.
 - **The app says it needs setup:** run the bootstrap command against the same Compose project and volume as the server.
 - **Sign-in or editing fails with a permission error:** check that your browser's origin matches `TASKBOARD_BASE_URL`. For HTTP, secure cookies must be disabled.
 - **The threshold does not change after editing `.env`:** change it in Workspace management; the environment value initializes new databases only.
 - **Port 8080 is already in use:** stop the conflicting service or change the host port in `compose.yaml` and update `TASKBOARD_BASE_URL` to match. Keep the container port at 8080.
-- **Discord stays disconnected:** confirm the bot token, server ID, installation, and outbound connectivity; inspect `docker compose logs taskboard`.
-- **An image cannot be uploaded:** PNG, JPEG, GIF, and WebP are supported. Check the database threshold and host free space.
+- **Discord stays disconnected:** confirm the bot token, server ID, installation, and outbound connectivity; inspect `docker compose logs backend`.
+- **An image cannot be uploaded:** PNG, JPEG, GIF, and WebP are supported. Check `TASKBOARD_MAX_IMAGE_MIB`, the database threshold, and host free space.
 
 ## Development checks and current verification
 
-The frontend build, the configuration unit test, and ten automated backend workflow tests passed during implementation. The scratch image was also built successfully. Interactive browser checks, live Discord verification, and a running-container smoke test were not completed before development was stopped.
+The frontend type/build check, all backend workflows, the tunnel protocol tests, and an end-to-end 10 MiB image upload/download through `rtn-mq` pass. The backend workflow suite also verifies that 10 MiB plus one byte is rejected without persistence. Both static `scratch` images build successfully. A running-container smoke test also verified relay-only API traffic, no backend HTTP listener, backend restart/rejoin, and gateway restart with its persisted one-use identity. Live Discord verification remains environment-specific.
 
 To rerun the existing checks locally, install Rust and Node.js, then run:
 
 ```sh
-cargo test --workspace
+cargo test --workspace --all-targets
+cargo clippy -p taskboard-wire -p taskboard-gateway --lib --bins -- -D warnings
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-The original design is in [TASKBOARD_PLAN.md](TASKBOARD_PLAN.md). This README describes the current container setup and supersedes the plan's earlier proposals for per-image limits, filesystem image storage, and automatic backup retention.
+The original design is in [TASKBOARD_PLAN.md](TASKBOARD_PLAN.md). This README describes the current container setup and supersedes the plan's earlier proposals for filesystem image storage and automatic backup retention.

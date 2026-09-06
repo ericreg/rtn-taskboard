@@ -27,31 +27,5 @@ services:
     cap_drop:
       - ALL
 
-  gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile.gateway
-      additional_contexts:
-        rtn_mq: ../rtn-mq
-    image: taskboard-gateway:local
-    environment:
-      TASKBOARD_RTN_JOIN_CODE: ${TASKBOARD_RTN_JOIN_CODE:-}
-      TASKBOARD_FRONTEND: /www
-      TASKBOARD_GATEWAY_BIND: 0.0.0.0:8080
-      TASKBOARD_RTN_IDENTITY: /data/rtn/gateway.key
-      TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
-      RUST_LOG: ${RUST_LOG:-taskboard_gateway=info,tower_http=info}
-    ports:
-      - "${TASKBOARD_PUBLISH_ADDRESS:-127.0.0.1}:8080:8080"
-    volumes:
-      - taskboard-gateway-data:/data
-    restart: unless-stopped
-    stop_grace_period: 60s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
 volumes:
   taskboard-backend-data:
-  taskboard-gateway-data:

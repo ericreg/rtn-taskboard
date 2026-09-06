@@ -22,7 +22,7 @@ async fn upload(s:AppState,auth:Auth,task_id:Option<i64>,project_id:Option<i64>,
         if let Some(id)=task_id{services::editable(&services::task_on(&mut conn,id).await?)?;}
         if let Some(id)=project_id{services::active_project(&mut conn,id).await?;}
     }
-    // Spool incoming bytes before taking the database writer lock. No per-image limit.
+    // Spool incoming bytes before taking the database writer lock.
     let temporary=tempfile::tempfile()?;let mut file=tokio::fs::File::from_std(temporary);
     let mut field=multipart.next_field().await.map_err(|_|Error::bad("Invalid image upload."))?.ok_or_else(||Error::bad("Select an image."))?;
     if field.name()!=Some("file"){return Err(Error::bad("Use the file upload field."));}
@@ -30,6 +30,7 @@ async fn upload(s:AppState,auth:Auth,task_id:Option<i64>,project_id:Option<i64>,
     let mut prefix=Vec::new();let mut size=0u64;let starting_size=s.storage().await?.database_bytes;
     while let Some(bytes)=field.chunk().await.map_err(|_|Error::bad("The upload was interrupted."))?{
         size=size.checked_add(bytes.len() as u64).ok_or_else(||Error::bad("Image is too large for this system."))?;
+        if size>s.config.max_image_bytes{return Err(Error::image_too_large(s.config.max_image_bytes));}
         let limit=s.max_db_bytes.load(Ordering::Relaxed);
         if limit>0&&starting_size.saturating_add(size)>limit{return Err(Error::full());}
         if prefix.len()<32{prefix.extend_from_slice(&bytes[..bytes.len().min(32-prefix.len())]);}

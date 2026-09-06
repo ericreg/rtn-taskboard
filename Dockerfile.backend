@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+FROM rust:1.96-alpine AS builder
+RUN apk add --no-cache musl-dev build-base binutils ca-certificates
+WORKDIR /build
+COPY --from=rtn_mq . /build/rtn-mq
+WORKDIR /build/rtn-taskboard
+COPY Cargo.toml Cargo.lock ./
+COPY backend/ ./backend/
+COPY gateway/ ./gateway/
+COPY wire/ ./wire/
+RUN --mount=type=cache,id=taskboard-cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=taskboard-cargo-target,sharing=locked,target=/build/rtn-taskboard/target \
+    cargo build --release --locked -p taskboard && \
+    mkdir -p /out /runtime/data/rtn /runtime/tmp && \
+    cp target/release/taskboard /out/taskboard && \
+    if readelf -l /out/taskboard | grep -q INTERP; then echo 'Binary must be statically linked'; exit 1; fi
+RUN chown -R 10001:10001 /runtime/data /runtime/tmp && \
+    chmod 0700 /runtime/data/rtn && chmod 1777 /runtime/tmp
+
+FROM scratch AS runtime
+COPY --from=builder /out/taskboard /taskboard
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder --chown=10001:10001 /runtime/data /data
+COPY --from=builder --chown=10001:10001 /runtime/tmp /tmp
+USER 10001:10001
+ENV TASKBOARD_DATABASE=/data/taskboard.db \
+    TASKBOARD_MAX_IMAGE_MIB=10 \
+    TASKBOARD_RTN_IDENTITY=/data/rtn/backend.key \
+    TASKBOARD_RTN_STATE=/data/rtn/backend.cbor \
+    TASKBOARD_RTN_RELAY_ONLY=true
+VOLUME ["/data"]
+ENTRYPOINT ["/taskboard"]

@@ -25,7 +25,7 @@ export interface TaskDetail {
 }
 export interface StorageStatus {
   database_bytes: number; database_file_bytes: number; wal_bytes: number; image_bytes: number;
-  limit_bytes: number; content_blocked: boolean; discord_configured: boolean; discord_connected: boolean; failed_deliveries: number;
+  max_image_bytes: number; limit_bytes: number; content_blocked: boolean; discord_configured: boolean; discord_connected: boolean; failed_deliveries: number;
 }
 export interface Session { user: User; csrf: string; discord?: { id: string; name: string } | null; pending_discord?: { id: string; name: string } | null }
 export interface Notice { id: number; task_id: number; kind: string; message: string; read_at: string | null; created_at: string }

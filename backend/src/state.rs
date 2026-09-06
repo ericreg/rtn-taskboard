@@ -13,7 +13,7 @@ pub struct AppState {
 #[derive(Serialize)]
 pub struct StorageStatus {
     pub database_bytes: u64, pub database_file_bytes: u64, pub wal_bytes: u64,
-    pub image_bytes: i64, pub limit_bytes: u64, pub content_blocked: bool,
+    pub image_bytes: i64, pub max_image_bytes: u64, pub limit_bytes: u64, pub content_blocked: bool,
     pub discord_configured: bool, pub discord_connected: bool, pub failed_deliveries: i64,
 }
 impl AppState {
@@ -48,6 +48,7 @@ impl AppState {
             database_bytes: size, database_file_bytes: file_size(self.config.database.clone()).await,
             wal_bytes: file_size(format!("{}-wal", self.config.database.display()).into()).await,
             image_bytes: sqlx::query_scalar("SELECT COALESCE(SUM(size),0) FROM attachments").fetch_one(&self.pool).await?,
+            max_image_bytes: self.config.max_image_bytes,
             limit_bytes: limit, content_blocked: limit > 0 && size >= limit,
             discord_configured: self.config.discord_token.is_some(), discord_connected: self.discord_connected.load(Ordering::Relaxed),
             failed_deliveries: sqlx::query_scalar("SELECT COUNT(*) FROM notification_deliveries WHERE state='failed'").fetch_one(&self.pool).await?,

@@ -11,6 +11,7 @@ impl Error {
     pub fn missing() -> Self { Self(StatusCode::NOT_FOUND, "not_found", "This item could not be found.".into()) }
     pub fn conflict() -> Self { Self(StatusCode::CONFLICT, "conflict", "This item changed. Reload it before saving your changes.".into()) }
     pub fn full() -> Self { Self(StatusCode::INSUFFICIENT_STORAGE, "storage_full", "The database content limit has been reached. Remove content or ask an editor to raise the limit.".into()) }
+    pub fn image_too_large(max_bytes: u64) -> Self { Self(StatusCode::PAYLOAD_TOO_LARGE, "image_too_large", format!("Images may be at most {} MiB.", max_bytes / (1024 * 1024))) }
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response { (self.0, Json(json!({"error":{"code":self.1,"message":self.2}}))).into_response() }

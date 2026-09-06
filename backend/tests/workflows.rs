@@ -9,7 +9,7 @@ struct Fixture{state:AppState,admin:Session,_dir:tempfile::TempDir}
 #[derive(Clone)]struct Session{cookie:String,csrf:String,id:i64}
 impl Fixture{
     async fn new()->Self{
-        let dir=tempfile::tempdir().unwrap();let state=AppState::new(Config{database:dir.path().join("taskboard.db"),bind:"127.0.0.1:0".into(),base_url:"http://localhost:8080".into(),frontend:dir.path().into(),max_db_bytes:0,secure_cookies:false,discord_token:None,discord_guild:None}).await.unwrap();
+        let dir=tempfile::tempdir().unwrap();let state=AppState::new(Config{database:dir.path().join("taskboard.db"),base_url:"http://localhost:8080".into(),max_db_bytes:0,max_image_bytes:10*1024*1024,secure_cookies:false,discord_token:None,discord_guild:None,rtn_identity:dir.path().join("rtn/backend.key"),rtn_state:dir.path().join("rtn/backend.cbor"),rtn_relay_only:false}).await.unwrap();
         auth::bootstrap(&state,"admin@example.test","Alex","a long test-only passphrase").await.unwrap();
         let (token,csrf)=auth::new_session(&state,1).await.unwrap();
         Self{state,admin:Session{cookie:format!("taskboard_session={token}"),csrf,id:1},_dir:dir}
@@ -81,9 +81,10 @@ fn png(size:usize)->Vec<u8>{let mut bytes=vec![0;size.max(32)];bytes[..8].copy_f
 
 #[tokio::test]async fn quota_covers_images_and_allows_recovery(){
     let f=Fixture::new().await;let project=f.project().await;let task=f.task(project).await;let id=task["id"].as_i64().unwrap();
-    // Regression: there is no legacy 10 MiB per-image cap. Streaming persists every byte.
-    let content=png(11*1024*1024);let (status,image)=image(&f.state,&f.admin,id,&content).await;assert_eq!(status,StatusCode::OK,"{image}");assert_eq!(image["size"],content.len());
+    let content=png(10*1024*1024);let (status,image)=image(&f.state,&f.admin,id,&content).await;assert_eq!(status,StatusCode::OK,"{image}");assert_eq!(image["size"],content.len());
     let attachment=image["id"].as_str().unwrap();let request=Request::builder().uri(format!("/api/v1/attachments/{attachment}")).header("Cookie",&f.admin.cookie).body(Body::empty()).unwrap();let response=http::router(f.state.clone()).oneshot(request).await.unwrap();assert_eq!(response.status(),StatusCode::OK);assert_eq!(response.into_body().collect().await.unwrap().to_bytes().as_ref(),content.as_slice());
+    let (status,error)=self::image(&f.state,&f.admin,id,&png(10*1024*1024+1)).await;assert_eq!(status,StatusCode::PAYLOAD_TOO_LARGE,"{error}");assert_eq!(error["error"]["code"],"image_too_large");
+    let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM attachments").fetch_one(&f.state.pool).await.unwrap();assert_eq!(count,1,"Oversized upload must not persist");
     assert_eq!(send(&f.state,"GET",&format!("/attachments/{attachment}"),None,None).await.0,StatusCode::UNAUTHORIZED);
     let size=f.state.storage().await.unwrap().database_bytes;assert!(size>content.len() as u64);
     send(&f.state,"PATCH","/admin/settings",Some(&f.admin),Some(json!({"max_db_bytes":size-1}))).await;

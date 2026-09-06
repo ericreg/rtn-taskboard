@@ -84,7 +84,7 @@ impl Handler{
         if name=="status"{
             let status=self.state.storage().await?;
             let limit=if status.limit_bytes==0{"Unlimited".into()}else{format!("{} bytes ({:.2} MiB)",status.limit_bytes,status.limit_bytes as f64/1_048_576.0)};
-            return Ok((format!("**Taskboard storage**\nDatabase: {} bytes ({:.2} MiB)\nImage content: {} bytes\nContent threshold: {limit}\nNew content: {}\nMain file: {} bytes · WAL: {} bytes\nThe threshold measures SQLite pages, including images; WAL is reported separately.",status.database_bytes,status.database_bytes as f64/1_048_576.0,status.image_bytes,if status.content_blocked{"blocked"}else{"allowed"},status.database_file_bytes,status.wal_bytes),vec![]));
+            return Ok((format!("**Taskboard storage**\nDatabase: {} bytes ({:.2} MiB)\nImage content: {} bytes\nMaximum per image: {} bytes ({:.2} MiB)\nContent threshold: {limit}\nNew content: {}\nMain file: {} bytes · WAL: {} bytes\nThe threshold measures SQLite pages, including images; WAL is reported separately.",status.database_bytes,status.database_bytes as f64/1_048_576.0,status.image_bytes,status.max_image_bytes,status.max_image_bytes as f64/1_048_576.0,if status.content_blocked{"blocked"}else{"allowed"},status.database_file_bytes,status.wal_bytes),vec![]));
         }
         if name=="help"{return Ok(("Use `/taskboard list`, `view`, `finish`, `cancel`, `delete`, `watch`, or `unwatch`. Finish marks Done; cancel keeps a Canceled task; delete moves it to Archive after confirmation. Restore and permanent deletion are available in the website. `/status` shows database size and the configured threshold.".into(),vec![]));}
         if name=="list"{
