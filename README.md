@@ -62,17 +62,13 @@ Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in `.env
 
 ### 4. Create the first editor
 
-Replace the email and display name below. This Bash command prompts for the password without echoing it or putting it in your command history, then passes it to the container over standard input:
+Pass the email and display name as Make variables. The password is always prompted for without echoing it or putting it in your command history, then passed to the container over standard input:
 
 ```sh
-bash -c '
-  read -r -s -p "Editor password (at least 15 characters): " taskboard_password
-  printf "\n" >&2
-  printf "%s\n" "$taskboard_password"
-' | docker compose run --rm -T backend bootstrap you@company.com "Your Name"
+make password EMAIL="you@company.com" NAME="Your Name"
 ```
 
-The command creates the database and first editor, then exits. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
+Omit either variable to be prompted for it, or run `make password` to enter all three values interactively. This command creates the database and first editor, then exits; despite its name, it does not reset an existing user's password. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
 
 Run bootstrap only once. If an editor already exists, use **Workspace management** in the app to invite additional users and change their roles.
 
