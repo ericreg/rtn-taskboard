@@ -11,6 +11,10 @@ The containers exchange signed, acknowledged, streaming frames over an Iroh rela
 
 For a local split deployment, put `rtn-taskboard` and `rtn-mq` beside each other, then run these commands from the Taskboard repository. You need Docker and a recent Docker Compose V2 with additional build-context support.
 
+All Compose configurations use `network_mode: host`, including one-off backend commands. On Linux, containers share the host network namespace instead of using a Compose bridge and its embedded DNS. On Docker Desktop 4.34 or later, first enable **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)).
+
+The gateway binds directly to `127.0.0.1:8080` by default; port 8080 must be free on the host. There are no Docker port mappings. `TASKBOARD_PUBLISH_ADDRESS` controls the gateway's bind address, and relay-only transport remains enabled by default.
+
 ### 1. Create your configuration
 
 ```sh
@@ -102,7 +106,7 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | --- | --- | --- |
 | `TASKBOARD_BASE_URL` | `http://localhost:8080` | Exact browser origin, including scheme and port; also used in invitation and Discord links |
 | `TASKBOARD_SECURE_COOKIES` | `false` in the example | Use `false` for local HTTP; set `true` when serving the app over HTTPS |
-| `TASKBOARD_PUBLISH_ADDRESS` | `127.0.0.1` | Host interface on which Compose publishes port 8080 |
+| `TASKBOARD_PUBLISH_ADDRESS` | `127.0.0.1` | Gateway HTTP bind address in host-networked Compose; set `0.0.0.0` for LAN access |
 | `TASKBOARD_RTN_JOIN_CODE` | Required by gateway | One-use enrollment secret; it never enters browser assets |
 | `TASKBOARD_RTN_JOIN_CODE_FILE` | Empty | Alternative file containing the join code, useful with a mounted secret |
 | `TASKBOARD_RTN_RELAY_ONLY` | `true` | Disables all direct-IP Iroh transport; use the configured/default relay only |
@@ -113,10 +117,10 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | SQLite database path |
 | `TASKBOARD_RTN_IDENTITY` | `/data/rtn/...key` | Persistent private endpoint key in each container |
 | `TASKBOARD_RTN_STATE` | `/data/rtn/backend.cbor` | Backend authority, grants, and redeemed membership state |
-| `TASKBOARD_GATEWAY_BIND` | `0.0.0.0:8080` | Public gateway HTTP listener inside its container |
+| `TASKBOARD_GATEWAY_BIND` | `127.0.0.1:8080` in Compose; `0.0.0.0:8080` in the image | Gateway HTTP listener; Compose derives this from `TASKBOARD_PUBLISH_ADDRESS` and port 8080 |
 | `RUST_LOG` | See `.env.example` | Application logging filter |
 
-Keep the path/listener settings at their container defaults unless you also adjust the volume or port configuration. The backend has no HTTP bind setting or HTTP listener; its only application transport is the authenticated `rtn-mq` tunnel.
+Keep the path settings at their container defaults unless you also adjust the volumes. Configure the Compose gateway listener through `TASKBOARD_PUBLISH_ADDRESS`. The backend has no HTTP bind setting or HTTP listener; its only application transport is the authenticated `rtn-mq` tunnel.
 
 ### Public DNS and HTTPS
 

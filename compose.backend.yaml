@@ -6,6 +6,7 @@ services:
       additional_contexts:
         rtn_mq: ../rtn-mq
     image: taskboard-backend:local
+    network_mode: host
     environment:
       TASKBOARD_BASE_URL: ${TASKBOARD_BASE_URL:-http://localhost:8080}
       TASKBOARD_SECURE_COOKIES: ${TASKBOARD_SECURE_COOKIES:-false}

@@ -6,6 +6,7 @@ services:
       additional_contexts:
         rtn_mq: ../rtn-mq
     image: taskboard-backend:local
+    network_mode: host
     environment:
       TASKBOARD_BASE_URL: ${TASKBOARD_BASE_URL:-http://localhost:8080}
       TASKBOARD_SECURE_COOKIES: ${TASKBOARD_SECURE_COOKIES:-false}
@@ -34,15 +35,14 @@ services:
       additional_contexts:
         rtn_mq: ../rtn-mq
     image: taskboard-gateway:local
+    network_mode: host
     environment:
       TASKBOARD_RTN_JOIN_CODE: ${TASKBOARD_RTN_JOIN_CODE:-}
       TASKBOARD_FRONTEND: /www
-      TASKBOARD_GATEWAY_BIND: 0.0.0.0:8080
+      TASKBOARD_GATEWAY_BIND: "${TASKBOARD_PUBLISH_ADDRESS:-127.0.0.1}:8080"
       TASKBOARD_RTN_IDENTITY: /data/rtn/gateway.key
       TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
       RUST_LOG: ${RUST_LOG:-taskboard_gateway=info,tower_http=info}
-    ports:
-      - "${TASKBOARD_PUBLISH_ADDRESS:-127.0.0.1}:8080:8080"
     volumes:
       - taskboard-gateway-data:/data
     restart: unless-stopped

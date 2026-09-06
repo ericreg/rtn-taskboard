@@ -41,6 +41,10 @@ docker build --build-context rtn_mq=../rtn-mq -f Dockerfile.gateway -t taskboard
 
 In a registry-based deployment, build both images in CI and deploy only the appropriate image and Compose configuration to each machine.
 
+All three Compose files use `network_mode: host`. On Linux, services and `docker compose run` commands share the host network namespace, avoiding the Compose bridge and its embedded DNS. Docker Desktop 4.34 or later requires **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)). Relay-only Iroh transport remains enabled by default.
+
+The gateway binds directly to `${TASKBOARD_PUBLISH_ADDRESS}:8080`, with `127.0.0.1` as the default address. There are no Docker port mappings; port 8080 must be free on the gateway host. After changing an existing deployment to host networking, apply it with `docker compose up -d --force-recreate` (use the relevant `-f` option for a split deployment). A container restart alone does not apply networking changes, and no image rebuild is needed.
+
 ## 1. Prepare the backend server
 
 Create `.env` from `.env.example`. The public URL is still required on the private backend because it validates browser origins and creates invitation/Discord links:
@@ -111,4 +115,4 @@ Configure the existing TLS reverse proxy to send `https://tasks.example.com` to 
 
 ## Local two-container deployment
 
-`compose.yaml` runs both roles on one Docker host while still forcing relay-only transport. Follow the README quick start. The services do not call each other over the Compose network, and the backend has no HTTP listener or published port.
+`compose.yaml` runs both roles with host networking on one Docker host and defaults to relay-only transport. Follow the README quick start. Application traffic still crosses the authenticated Iroh relay tunnel; the backend has no HTTP listener, and neither service uses Docker port mappings.
