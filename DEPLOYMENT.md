@@ -28,6 +28,8 @@ The gateway uses its configured public origin, not client-supplied `Host`, `Forw
 
 ## Repository layout and builds
 
+Install [just](https://just.systems/man/en/installation.html) and Bash on each host to use the repository’s `justfile` commands. Run `just --list` to see the available recipes.
+
 The local builds expect adjacent checkouts:
 
 ```text
@@ -45,7 +47,7 @@ docker build --build-context rtn_mq=../rtn-mq --build-arg TASKBOARD_UID="$(id -u
 
 In a registry-based deployment, build both images in CI and deploy only the appropriate image and Compose configuration to each machine.
 
-Make automatically exports the invoking user's UID/GID for both image builds and container runtime users. For direct Compose commands, run this in your shell on **each host** first (the numbers may differ between machines):
+`just` automatically exports the invoking user's UID/GID for both image builds and container runtime users. For direct Compose commands, run this in your shell on **each host** first (the numbers may differ between machines):
 
 ```sh
 export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
@@ -69,7 +71,7 @@ TASKBOARD_MAX_IMAGE_MIB=10
 TASKBOARD_RTN_RELAY_ONLY=true
 ```
 
-The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host and owned by your user. Make's backend commands prepare this directory automatically. For a new installation using Compose directly, create it as your user before running backend commands:
+The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host and owned by your user. The backend recipes prepare this directory automatically. For a new installation using Compose directly, create it as your user before running backend commands:
 
 ```sh
 umask 077
@@ -81,21 +83,22 @@ For an existing named-volume installation, follow [the migration instructions](R
 Build the image, then seed the database while the backend service is stopped:
 
 ```sh
-docker compose -f compose.backend.yaml build
-make seed EMAIL="you@company.com" NAME="Your Name"
+just backend
+just seed "you@company.com" "Your Name"
 ```
 
-`make seed` prompts for the editor password. It initializes the schema, then commits the initial editor, backend private key, and CBOR authority/enrollment state in `./data/taskboard.db` together. It runs offline, writes no backend `.key` or `.cbor` files, and refuses to overwrite existing users or identity state. Startup requires this seeded identity; it does not import old files or silently generate new credentials.
+`just seed` prompts for the editor password. It initializes the schema, then commits the initial editor, backend private key, and CBOR authority/enrollment state in `./data/taskboard.db` together. It runs offline, writes no backend `.key` or `.cbor` files, and refuses to overwrite existing users or identity state. Startup requires this seeded identity; it does not import old files or silently generate new credentials.
 
 Issue the gateway code and start the backend:
 
 ```sh
-docker compose -f compose.backend.yaml run --rm backend issue-gateway-code
-docker compose -f compose.backend.yaml up -d
-docker compose -f compose.backend.yaml ps
+just join-code
+just start-backend
 ```
 
 Keep the printed `rtn-mq://join/...` value private. Issuing a code requires relay connectivity and saves the grant in SQLite. Run only one backend transport process against the database at a time, including `issue-gateway-code`.
+
+`just start-backend` uses the image built by `just backend` and follows the backend logs. Press `Ctrl+C` to stop following logs; the service keeps running.
 
 There is deliberately no `ports` entry and no HTTP listener inside the backend container. API requests can reach its in-process router only after arriving as authenticated tunnel frames. `TASKBOARD_RTN_RELAY_ONLY=true` also prevents Iroh from accepting a direct-IP data path.
 
