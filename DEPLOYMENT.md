@@ -133,11 +133,35 @@ When upgrading from backend-wide origin validation, rebuild and recreate both se
 ## Recovery and operations
 
 - Both processes reconnect outbound through the relay. The gateway explicitly re-enrolls its same persisted identity after a backend restart; this does not consume another code use.
-- A disconnected backend makes gateway readiness fail and API requests return `503` rather than serving stale data. Static assets remain available.
+- Gateway readiness requires both tunnel topic subscriptions, not just a connected peer. A new API request waits up to eight seconds for subscriptions to recover, then returns `503` if they are still unavailable. Static assets remain available. The existing concurrency limit also bounds requests waiting for recovery.
+- The gateway only retries a request-start publication when `rtn-mq` explicitly reports that no subscriber accepted it. Once a publication is accepted, acknowledgement failures do not trigger a fresh HTTP request or replay; the messaging layer retains its existing delivery semantics.
 - A connection loss can make the outcome of an in-flight write unknown after the backend accepted its frames. `rtn-mq` prevents message forgery and duplicate frame delivery, but it does not turn Taskboard CRUD operations into a cross-process transaction. Reconcile state before manually repeating a write that ended in `503`.
 - Back up the backend host's `./data` directory, including `taskboard.db`, SQLite sidecars, and `rtn`. Back up the gateway `/data/rtn` identity independently.
 - Never copy the gateway identity into a second running gateway. The current protocol intentionally supports one global gateway for this code and expects exactly one response recipient.
 - Issuing another code does not revoke an existing gateway certificate. If the gateway private key is suspected compromised, take the deployment offline and replace the backend `rtn` authority/enrollment state and gateway identity together, then issue a new code. Preserve the SQLite database.
+
+### Diagnosing disconnects
+
+The logging defaults include peer connection/removal events, QUIC close reasons, session duration, control/data stream failures, protocol rejections, and queue/certificate failures. They do not log join secrets, private keys, browser headers, or request bodies. On reconnect, the gateway logs how long recovery took and whether both subscriptions became ready.
+
+If an existing `.env` overrides `RUST_LOG`, include these filters on both hosts and recreate the corresponding container:
+
+```dotenv
+RUST_LOG=taskboard=info,taskboard_gateway=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn
+```
+
+An exported shell `RUST_LOG` overrides `.env` during Compose interpolation. Unset it (or use `env -u RUST_LOG` before the Compose command) if the container is still using an older filter.
+
+Capture both sides over the same time window:
+
+```sh
+# Gateway host (export TASKBOARD_UID/GID first when using Compose directly)
+docker compose -f compose.gateway.yaml logs --since=10m --timestamps gateway
+# Backend host
+docker compose -f compose.backend.yaml logs --since=10m --timestamps backend
+```
+
+Look for the earliest transport/protocol error preceding `messaging peer removed`, then correlate peer IDs and timestamps across hosts. `Taskboard backend disconnected; attempting to rejoin` is the recovery symptom, not the underlying cause. Local shutdowns and deliberate reconnect tests will also produce connection-close events.
 
 ## Local two-container deployment
 

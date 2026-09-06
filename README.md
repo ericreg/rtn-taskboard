@@ -308,6 +308,7 @@ docker compose exec backend /taskboard invalidate-sessions
 - **The threshold does not change after editing `.env`:** change it in Workspace management; the environment value initializes new databases only.
 - **Port 8080 is already in use:** stop the conflicting service or change the gateway listener port in Compose and update `TASKBOARD_GATEWAY_ORIGIN` to match the browser URL. Update `TASKBOARD_BASE_URL` too if generated links should use that URL. Host networking has no separate published/container ports.
 - **Discord stays disconnected:** confirm the bot token, server ID, installation, and outbound connectivity; inspect `docker compose logs backend`.
+- **Gateway repeatedly reconnects or API requests return `503`:** see [Diagnosing disconnects](DEPLOYMENT.md#diagnosing-disconnects). Enable the `rtn_mq=info,iroh=warn,iroh_relay=warn` filters on both hosts so the underlying close/rejection reason is captured. New requests wait up to eight seconds for both tunnel subscriptions; accepted requests are not blindly replayed.
 - **An image cannot be uploaded:** PNG, JPEG, GIF, and WebP are supported. Check `TASKBOARD_MAX_IMAGE_MIB`, the database threshold, and host free space.
 
 ## Development checks and current verification

@@ -40,6 +40,8 @@ use tower_http::{
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_IN_FLIGHT: usize = 128;
+const RECONNECT_WAIT: Duration = Duration::from_secs(8);
+const READINESS_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct Config {
@@ -134,6 +136,12 @@ pub async fn connect(config: &Config) -> anyhow::Result<(GatewayState, Subscript
         .await
         .context("backend did not accept the response subscription")?;
     let requests = endpoint.publisher(REQUEST_TOPIC)?;
+    wait_for_topics(
+        &endpoint,
+        host,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .await?;
     Ok((
         GatewayState {
             endpoint,
@@ -196,12 +204,42 @@ pub async fn reconnect_loop(endpoint: MessagingEndpoint, code: JoinCode) {
             .map(|metrics| metrics.peers == 0)
             .unwrap_or(true);
         if disconnected {
-            tracing::warn!("Taskboard backend disconnected; attempting to rejoin");
+            let started = tokio::time::Instant::now();
+            tracing::warn!(host = %code.host_id(), "Taskboard backend disconnected; attempting to rejoin");
             if let Err(error) = endpoint.rejoin(&code).await {
-                tracing::warn!(%error, "Taskboard backend rejoin failed");
+                tracing::warn!(%error, elapsed_ms=started.elapsed().as_millis(), "Taskboard backend rejoin failed");
+            } else if let Err(error) = wait_for_topics(
+                &endpoint,
+                code.host_id(),
+                tokio::time::Instant::now() + RECONNECT_WAIT,
+            )
+            .await
+            {
+                tracing::warn!(%error, elapsed_ms=started.elapsed().as_millis(), "Taskboard backend rejoined but tunnel subscriptions are not ready");
+            } else {
+                tracing::info!(host = %code.host_id(), elapsed_ms=started.elapsed().as_millis(), "Taskboard backend rejoined; tunnel subscriptions ready");
             }
         }
     }
+}
+
+async fn wait_for_topics(
+    endpoint: &MessagingEndpoint,
+    host: rtn_mq::EndpointId,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<()> {
+    tokio::time::timeout_at(deadline, async {
+        while !endpoint
+            .topics_ready(host, REQUEST_TOPIC, RESPONSE_TOPIC)
+            .await?
+        {
+            tokio::time::sleep(READINESS_POLL).await;
+        }
+        Ok::<_, rtn_mq::Error>(())
+    })
+    .await
+    .context("backend tunnel subscriptions did not become ready within the reconnect wait")??;
+    Ok(())
 }
 
 async fn proxy(
@@ -316,11 +354,19 @@ async fn forward(
 }
 
 async fn send_frame(state: &GatewayState, envelope: Envelope) -> anyhow::Result<()> {
+    // Only wait/retry before accepting a new HTTP request into the tunnel.
+    // NoSubscribers means publish admitted nothing; an acknowledged publication
+    // timeout may have processed remotely and must never be replayed here.
+    let request_start = matches!(&envelope.frame, Frame::RequestStart { .. });
     let bytes = envelope.encode().context("encode tunnel frame")?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
+    let started = tokio::time::Instant::now();
+    let deadline = started + RECONNECT_WAIT;
+    let mut receipt = loop {
+        if request_start {
+            wait_for_topics(&state.endpoint, state.host, deadline).await?;
+        }
         let payload = state.endpoint.buffers().copy_from_slice(&bytes)?;
-        let mut receipt = state
+        match state
             .requests
             .publish(
                 payload,
@@ -330,22 +376,35 @@ async fn send_frame(state: &GatewayState, envelope: Envelope) -> anyhow::Result<
                     ..Default::default()
                 },
             )
-            .await?;
-        let outcomes = receipt
-            .wait_for_processing(Duration::from_secs(120))
-            .await?;
-        if outcomes.len() == 1
-            && outcomes[0].0 == state.host
-            && matches!(outcomes[0].1, RecipientOutcome::Processed)
+            .await
         {
-            return Ok(());
+            Ok(receipt) => break receipt,
+            Err(rtn_mq::Error::NoSubscribers)
+                if request_start && tokio::time::Instant::now() < deadline =>
+            {
+                // The peer can disappear between the readiness snapshot and
+                // publication. Retry only this unaccepted RequestStart frame.
+                tokio::time::sleep(READINESS_POLL).await;
+            }
+            Err(error) => return Err(error.into()),
         }
-        if outcomes.is_empty() && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        bail!("backend did not acknowledge tunnel frame: {outcomes:?}");
+    };
+    if request_start && started.elapsed() >= READINESS_POLL {
+        tracing::info!(
+            wait_ms = started.elapsed().as_millis(),
+            "gateway request waited for tunnel subscriptions"
+        );
     }
+    let outcomes = receipt
+        .wait_for_processing(Duration::from_secs(120))
+        .await?;
+    if outcomes.len() == 1
+        && outcomes[0].0 == state.host
+        && matches!(outcomes[0].1, RecipientOutcome::Processed)
+    {
+        return Ok(());
+    }
+    bail!("backend did not acknowledge tunnel frame: {outcomes:?}");
 }
 
 async fn accept_response(envelope: Envelope, pending: &Mutex<HashMap<RequestId, PendingResponse>>) {
@@ -473,8 +532,12 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 }
 
 async fn ready(State(state): State<GatewayState>) -> Response {
-    match state.endpoint.metrics().await {
-        Ok(metrics) if metrics.peers == 1 => "ok".into_response(),
+    match state
+        .endpoint
+        .topics_ready(state.host, REQUEST_TOPIC, RESPONSE_TOPIC)
+        .await
+    {
+        Ok(true) => "ok".into_response(),
         _ => unavailable(),
     }
 }
@@ -824,6 +887,109 @@ mod tests {
         assert_eq!(
             download.into_body().collect().await.unwrap().to_bytes(),
             image.as_slice()
+        );
+
+        // A live QUIC peer is insufficient: both topic directions must recover.
+        state
+            .endpoint
+            .disconnect(backend.endpoint_id())
+            .await
+            .unwrap();
+        backend
+            .disconnect(state.endpoint.endpoint_id())
+            .await
+            .unwrap();
+        assert_eq!(
+            call(
+                &app,
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let unavailable = tokio::time::timeout(
+            RECONNECT_WAIT + Duration::from_secs(2),
+            call(
+                &app,
+                Request::builder()
+                    .uri("/api/v1/auth/setup")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("reconnect wait must be bounded");
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(state.pending.lock().await.is_empty());
+
+        let waiting_app = app.clone();
+        let waiting_cookie = cookie.clone();
+        let waiting_csrf = csrf.to_owned();
+        let waiting = tokio::spawn(async move {
+            call(
+                &waiting_app,
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ORIGIN, "https://gateway.test")
+                    .header(header::COOKIE, waiting_cookie)
+                    .header("x-csrf-token", waiting_csrf)
+                    .body(Body::from(
+                        json!({"name":"Created once after reconnect"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !waiting.is_finished(),
+            "request should wait rather than return an immediate 503"
+        );
+        state.endpoint.rejoin(&code).await.unwrap();
+        let created = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        created.into_body().collect().await.unwrap();
+        let projects = call(
+            &app,
+            Request::builder()
+                .uri("/api/v1/projects")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        let projects: Value =
+            serde_json::from_slice(&projects.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            projects
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["name"] == "Created once after reconnect")
+                .count(),
+            1
+        );
+        assert_eq!(
+            call(
+                &app,
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await
+            .status(),
+            StatusCode::OK
         );
 
         response_task.abort();

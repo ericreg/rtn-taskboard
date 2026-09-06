@@ -3,7 +3,7 @@ use taskboard::{auth, config::Config, state::AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "taskboard=info,tower_http=info".into())).init();
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "taskboard=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn".into())).init();
     let args: Vec<String> = std::env::args().collect();
     let config = Config::from_env()?;
     if args.get(1).map(String::as_str) == Some("issue-gateway-code") {

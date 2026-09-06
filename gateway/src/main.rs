@@ -4,8 +4,10 @@ use std::io::{Read, Write};
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "taskboard_gateway=info,tower_http=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "taskboard_gateway=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn"
+                    .into()
+            }),
         )
         .init();
     let config = taskboard_gateway::Config::from_env()?;

@@ -22,7 +22,7 @@ services:
       TASKBOARD_RTN_IDENTITY: /data/rtn/backend.key
       TASKBOARD_RTN_STATE: /data/rtn/backend.cbor
       TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
-      RUST_LOG: ${RUST_LOG:-taskboard=info,tower_http=info}
+      RUST_LOG: ${RUST_LOG:-taskboard=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn}
     volumes:
       - ./data:/data
     restart: unless-stopped
