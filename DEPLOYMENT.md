@@ -38,7 +38,9 @@ parent/
   rtn-taskboard/
 ```
 
-Compose passes `../rtn-mq` as a named Docker build context. To build without Compose:
+Compose passes `../rtn-mq` as a named Docker build context. That checkout must include the application storage APIs (`HostStorage`, `generate_host_state`, `host_with_storage`, and identity byte conversion) and `topics_ready`. Publish companion changes to the `rtn-mq` repository separately, then update both checkouts on the build host. A Taskboard-only pull cannot update this dependency.
+
+To build without Compose:
 
 ```sh
 docker build --build-context rtn_mq=../rtn-mq --build-arg TASKBOARD_UID="$(id -u)" --build-arg TASKBOARD_GID="$(id -g)" -f Dockerfile.backend -t taskboard-backend:local .

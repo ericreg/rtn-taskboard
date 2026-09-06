@@ -11,6 +11,8 @@ The containers exchange signed, acknowledged, streaming frames over an Iroh rela
 
 For a local split deployment, put `rtn-taskboard` and `rtn-mq` beside each other, then run these commands from the Taskboard repository. You need [just](https://just.systems/man/en/installation.html), Bash, Docker, and a recent Docker Compose V2 with additional build-context support. Run `just` or `just --list` to see the commands in the repository’s `justfile`.
 
+Keep both checkouts up to date. This version requires the `rtn-mq` application storage APIs (`HostStorage`, `generate_host_state`, `host_with_storage`, and identity byte conversion) and `topics_ready`. Companion changes in `../rtn-mq` must be committed and pushed in that repository separately before pulling them on a deployment host; updating Taskboard alone does not include them.
+
 All Compose configurations use `network_mode: host`, including one-off backend commands. On Linux, containers share the host network namespace instead of using a Compose bridge and its embedded DNS. On Docker Desktop 4.34 or later, first enable **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)).
 
 The gateway binds directly to `127.0.0.1:8080` by default; port 8080 must be free on the host. There are no Docker port mappings. `TASKBOARD_PUBLISH_ADDRESS` controls the gateway's bind address, and relay-only transport remains enabled by default.
@@ -304,6 +306,7 @@ docker compose exec backend /taskboard invalidate-sessions
 
 ## Troubleshooting
 
+- **Build reports missing `rtn_mq::HostStorage`, `generate_host_state`, or `topics_ready`:** the adjacent `../rtn-mq` checkout lacks the companion API changes. Publish those changes from the development checkout, then run `git -C ../rtn-mq pull --ff-only` on the build host and retry `just backend`. Docker copies that checkout through the `rtn_mq` build context; clearing its cache cannot add missing source changes.
 - **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove either Taskboard data volume. Do not use Docker Desktop's **Clean / Purge data** option if a volume contains data you need.
 - **Seed reports an initialized database:** users or a backend identity already exist. Seed never resets an account or rotates an existing identity. Sign in to the existing account and use Workspace management for invitations or password reset links.
 - **The backend says it is not seeded:** run `just seed` against the same database before first startup. Older installations with separate backend key/state files require an explicit migration; startup does not import them, and seed will not overwrite their users.
