@@ -39,11 +39,19 @@ parent/
 Compose passes `../rtn-mq` as a named Docker build context. To build without Compose:
 
 ```sh
-docker build --build-context rtn_mq=../rtn-mq -f Dockerfile.backend -t taskboard-backend:local .
-docker build --build-context rtn_mq=../rtn-mq -f Dockerfile.gateway -t taskboard-gateway:local .
+docker build --build-context rtn_mq=../rtn-mq --build-arg TASKBOARD_UID="$(id -u)" --build-arg TASKBOARD_GID="$(id -g)" -f Dockerfile.backend -t taskboard-backend:local .
+docker build --build-context rtn_mq=../rtn-mq --build-arg TASKBOARD_UID="$(id -u)" --build-arg TASKBOARD_GID="$(id -g)" -f Dockerfile.gateway -t taskboard-gateway:local .
 ```
 
 In a registry-based deployment, build both images in CI and deploy only the appropriate image and Compose configuration to each machine.
+
+Make automatically exports the invoking user's UID/GID for both image builds and container runtime users. For direct Compose commands, run this in your shell on **each host** first (the numbers may differ between machines):
+
+```sh
+export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
+```
+
+Compose requires these values rather than silently falling back to another user. Existing storage, including a gateway volume created from a registry image with different IDs, needs matching ownership; see [Changing the container user](README.md#changing-the-container-user). Normal services remain non-root when invoked by a non-root user.
 
 All three Compose files use `network_mode: host`. On Linux, services and `docker compose run` commands share the host network namespace, avoiding the Compose bridge and its embedded DNS. Docker Desktop 4.34 or later requires **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)). Relay-only Iroh transport remains enabled by default.
 
@@ -61,10 +69,11 @@ TASKBOARD_MAX_IMAGE_MIB=10
 TASKBOARD_RTN_RELAY_ONLY=true
 ```
 
-The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host. For a new Linux installation, prepare the directory for the non-root container before running backend commands:
+The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host and owned by your user. Make's backend commands prepare this directory automatically. For a new installation using Compose directly, create it as your user before running backend commands:
 
 ```sh
-sudo install -d -m 0700 -o 10001 -g 10001 ./data
+umask 077
+mkdir -p ./data
 ```
 
 For an existing named-volume installation, follow [the migration instructions](README.md#migrating-an-existing-backend-named-volume) first; an empty bind mount will not automatically import the old database or identity.

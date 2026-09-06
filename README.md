@@ -34,13 +34,20 @@ TASKBOARD_MAX_IMAGE_MIB=10
 
 Discord is optional. Leave its token and server ID empty unless you want to enable the bot.
 
-The backend stores SQLite and its transport identity in `./data` on the host. For a new Linux installation, prepare it for the container's UID/GID 10001 before running backend commands:
+Make commands automatically run both containers as the invoking host user's UID/GID. Before using the direct `docker compose` commands below, export those IDs in your shell on each machine:
 
 ```sh
-sudo install -d -m 0700 -o 10001 -g 10001 ./data
+export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
 ```
 
-For an existing named-volume installation, migrate the data as described below instead of starting with an empty directory.
+The backend stores SQLite and its transport identity in `./data` on the host. Make's backend commands create this directory as your user. For a new installation using Compose directly, create it first so Docker does not create a root-owned bind-mount directory:
+
+```sh
+umask 077
+mkdir -p ./data
+```
+
+For an existing named-volume installation, migrate the data as described below instead of starting with an empty directory. For files already owned by UID 10001, follow [Changing the container user](#changing-the-container-user).
 
 ### 2. Build the image
 
@@ -109,6 +116,7 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `TASKBOARD_UID`, `TASKBOARD_GID` | Current user, exported by Make | Host UID/GID for both runtime users and image data ownership; required for direct Compose commands |
 | `TASKBOARD_BASE_URL` | `http://localhost:8080` | Backend-only public URL for invitation, password-reset, and Discord links; not a browser-origin allowlist |
 | `TASKBOARD_GATEWAY_ORIGIN` | `http://localhost:8080` | Gateway-only allowed browser origin, including scheme and port; independent of the backend link URL |
 | `TASKBOARD_SECURE_COOKIES` | `false` in the example | Use `false` for local HTTP; set `true` when serving the app over HTTPS |
@@ -222,6 +230,35 @@ Database timestamps and calculated deadline instants are stored in UTC. Each acc
 
 Both backend Compose configurations bind-mount **`./data:/data`**. The SQLite database is `./data/taskboard.db` on the host, alongside its SQLite sidecar files and `./data/rtn` backend identity/enrollment state. This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
 
+### Changing the container user
+
+Both services use the host UID/GID supplied by Make (or exported for direct Compose). The image builds also use those IDs so a newly created gateway volume is writable by that user. This uses Docker's [runtime user setting](https://docs.docker.com/reference/compose-file/services/#user); standalone builds without UID/GID build arguments retain the non-root `10001:10001` fallback. Do not run Make with `sudo` unless you intentionally want root IDs.
+
+Changing the runtime user does not change existing file ownership. When upgrading from UID 10001, stop the backend on its host and transfer ownership of the existing directory, without deleting or reinitializing it:
+
+```sh
+export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
+docker compose -f compose.backend.yaml stop backend
+sudo chown -R "$TASKBOARD_UID:$TASKBOARD_GID" ./data
+sudo chmod 0700 ./data ./data/rtn
+docker compose -f compose.backend.yaml up -d --build backend
+```
+
+The gateway's existing named volume needs the same one-time ownership transfer on its own host. Stop the gateway and inspect its `/data` mount first. For the default project name, the volume is `rtn-taskboard_taskboard-gateway-data`; substitute the inspected name if yours differs:
+
+```sh
+export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
+docker compose -f compose.gateway.yaml stop gateway
+docker inspect rtn-taskboard-gateway-1 --format '{{json .Mounts}}'
+docker volume inspect rtn-taskboard_taskboard-gateway-data
+docker run --rm --network none --user 0:0 \
+  --mount type=volume,src=rtn-taskboard_taskboard-gateway-data,dst=/data \
+  alpine:3 chown -R "$TASKBOARD_UID:$TASKBOARD_GID" /data
+docker compose -f compose.gateway.yaml up -d --build gateway
+```
+
+Only the one-off ownership helper runs as root; the application services run as your user. Keep the `rtn` directory mode at `0700` and key files private. No new join code or database reset is needed.
+
 Rebuilding images or using `docker compose down` preserves this data. `docker compose down -v` does not delete the bind-mounted host directory, but **does delete the gateway's named volume and enrolled identity**.
 
 ### Migrating an existing backend named volume
@@ -237,7 +274,7 @@ test ! -e ./data && docker compose -f compose.backend.yaml stop backend && docke
 After the copy succeeds, on Linux set ownership for the non-root backend and recreate it:
 
 ```sh
-sudo chown -R 10001:10001 ./data
+sudo chown -R "$(id -u):$(id -g)" ./data
 sudo chmod 0700 ./data ./data/rtn
 docker compose -f compose.backend.yaml up -d backend
 ```

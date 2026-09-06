@@ -1,4 +1,8 @@
-.PHONY: start-gateway stop-gateway start-backend stop-backend join-code password
+.PHONY: start-gateway stop-gateway start-backend stop-backend join-code password prepare-data
+
+# Compose cannot determine the invoking host user on its own.
+export TASKBOARD_UID := $(shell id -u)
+export TASKBOARD_GID := $(shell id -g)
 
 start-gateway:
 	docker compose -f compose.gateway.yaml up -d --build gateway
@@ -7,19 +11,25 @@ start-gateway:
 stop-gateway:
 	docker compose -f compose.gateway.yaml down
 
-start-backend:
+start-backend: prepare-data
 	docker compose -f compose.backend.yaml up -d --build backend
 	docker compose -f compose.backend.yaml logs -f backend
 
 stop-backend:
 	docker compose -f compose.backend.yaml down
 
-join-code:
+prepare-data:
+	@umask 077; mkdir -p ./data
+	@test -w ./data && test -x ./data || { \
+	  printf 'The data directory is not writable by your user. Migrate its ownership as described in README.md before starting the backend.\n' >&2; exit 1; }
+	@chgrp "$$TASKBOARD_GID" ./data
+
+join-code: prepare-data
 	docker compose run --rm backend issue-gateway-code
 
 password: export TASKBOARD_EDITOR_EMAIL = $(value EMAIL)
 password: export TASKBOARD_EDITOR_NAME = $(value NAME)
-password:
+password: prepare-data
 	@bash -eu -o pipefail -c '\
 	taskboard_email="$${TASKBOARD_EDITOR_EMAIL:-}"; \
 	taskboard_name="$${TASKBOARD_EDITOR_NAME:-}"; \

@@ -3,9 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gateway
+      args:
+        TASKBOARD_UID: ${TASKBOARD_UID:?Run through make or export TASKBOARD_UID from id -u}
+        TASKBOARD_GID: ${TASKBOARD_GID:?Run through make or export TASKBOARD_GID from id -g}
       additional_contexts:
         rtn_mq: ../rtn-mq
     image: taskboard-gateway:local
+    user: "${TASKBOARD_UID:?Set TASKBOARD_UID}:${TASKBOARD_GID:?Set TASKBOARD_GID}"
     network_mode: host
     environment:
       TASKBOARD_RTN_JOIN_CODE: ${TASKBOARD_RTN_JOIN_CODE:-}

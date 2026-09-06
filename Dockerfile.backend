@@ -14,15 +14,19 @@ RUN --mount=type=cache,id=taskboard-cargo-registry,sharing=locked,target=/usr/lo
     mkdir -p /out /runtime/data/rtn /runtime/tmp && \
     cp target/release/taskboard /out/taskboard && \
     if readelf -l /out/taskboard | grep -q INTERP; then echo 'Binary must be statically linked'; exit 1; fi
-RUN chown -R 10001:10001 /runtime/data /runtime/tmp && \
+ARG TASKBOARD_UID=10001
+ARG TASKBOARD_GID=10001
+RUN chown -R ${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/data /runtime/tmp && \
     chmod 0700 /runtime/data/rtn && chmod 1777 /runtime/tmp
 
 FROM scratch AS runtime
+ARG TASKBOARD_UID=10001
+ARG TASKBOARD_GID=10001
 COPY --from=builder /out/taskboard /taskboard
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=10001:10001 /runtime/data /data
-COPY --from=builder --chown=10001:10001 /runtime/tmp /tmp
-USER 10001:10001
+COPY --from=builder --chown=${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/data /data
+COPY --from=builder --chown=${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/tmp /tmp
+USER ${TASKBOARD_UID}:${TASKBOARD_GID}
 ENV TASKBOARD_DATABASE=/data/taskboard.db \
     TASKBOARD_MAX_IMAGE_MIB=10 \
     TASKBOARD_RTN_IDENTITY=/data/rtn/backend.key \
