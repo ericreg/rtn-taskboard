@@ -20,7 +20,7 @@ services:
       TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
       RUST_LOG: ${RUST_LOG:-taskboard=info,tower_http=info}
     volumes:
-      - taskboard-backend-data:/data
+      - ./data:/data
     restart: unless-stopped
     stop_grace_period: 60s
     security_opt:
@@ -54,5 +54,4 @@ services:
       - ALL
 
 volumes:
-  taskboard-backend-data:
   taskboard-gateway-data:

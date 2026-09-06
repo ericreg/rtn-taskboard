@@ -61,6 +61,14 @@ TASKBOARD_MAX_IMAGE_MIB=10
 TASKBOARD_RTN_RELAY_ONLY=true
 ```
 
+The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host. For a new Linux installation, prepare the directory for the non-root container before running backend commands:
+
+```sh
+sudo install -d -m 0700 -o 10001 -g 10001 ./data
+```
+
+For an existing named-volume installation, follow [the migration instructions](README.md#migrating-an-existing-backend-named-volume) first; an empty bind mount will not automatically import the old database or identity.
+
 Build the image, then issue the credential while the backend service is stopped:
 
 ```sh
@@ -68,7 +76,7 @@ docker compose -f compose.backend.yaml build
 docker compose -f compose.backend.yaml run --rm backend issue-gateway-code
 ```
 
-Keep the printed `rtn-mq://join/...` value private. This command also initializes persistent backend identity and enrollment state in `taskboard-backend-data`. Do not run a second copy of the command against that volume while the backend is running.
+Keep the printed `rtn-mq://join/...` value private. This command also initializes persistent backend identity and enrollment state in `./data/rtn`. Do not run a second copy of the command against that directory while the backend is running.
 
 Bootstrap the first editor, then start the backend:
 
@@ -111,14 +119,14 @@ Configure the existing TLS reverse proxy to send `https://tasks.example.com` to 
 
 For local HTTP instead, set `TASKBOARD_GATEWAY_ORIGIN=http://localhost:8080` (the default) or `http://127.0.0.1:8080`, matching the address you actually open, and use `TASKBOARD_SECURE_COOKIES=false` on the backend. The backend link URL can differ without blocking login or writes.
 
-When upgrading from backend-wide origin validation, rebuild and recreate both services on their respective machines. Set `TASKBOARD_GATEWAY_ORIGIN` on the gateway before upgrading if its browser URL is not the default; it does not inherit the backend's `TASKBOARD_BASE_URL`. Preserve both data volumes and the existing join code.
+When upgrading from backend-wide origin validation, rebuild and recreate both services on their respective machines. Set `TASKBOARD_GATEWAY_ORIGIN` on the gateway before upgrading if its browser URL is not the default; it does not inherit the backend's `TASKBOARD_BASE_URL`. Preserve the backend data directory, gateway volume, and existing join code.
 
 ## Recovery and operations
 
 - Both processes reconnect outbound through the relay. The gateway explicitly re-enrolls its same persisted identity after a backend restart; this does not consume another code use.
 - A disconnected backend makes gateway readiness fail and API requests return `503` rather than serving stale data. Static assets remain available.
 - A connection loss can make the outcome of an in-flight write unknown after the backend accepted its frames. `rtn-mq` prevents message forgery and duplicate frame delivery, but it does not turn Taskboard CRUD operations into a cross-process transaction. Reconcile state before manually repeating a write that ended in `503`.
-- Back up the backend `/data` volume, including `taskboard.db` and `/data/rtn`. Back up the gateway `/data/rtn` identity independently.
+- Back up the backend host's `./data` directory, including `taskboard.db`, SQLite sidecars, and `rtn`. Back up the gateway `/data/rtn` identity independently.
 - Never copy the gateway identity into a second running gateway. The current protocol intentionally supports one global gateway for this code and expects exactly one response recipient.
 - Issuing another code does not revoke an existing gateway certificate. If the gateway private key is suspected compromised, take the deployment offline and replace the backend `rtn` authority/enrollment state and gateway identity together, then issue a new code. Preserve the SQLite database.
 

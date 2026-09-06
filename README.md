@@ -34,6 +34,14 @@ TASKBOARD_MAX_IMAGE_MIB=10
 
 Discord is optional. Leave its token and server ID empty unless you want to enable the bot.
 
+The backend stores SQLite and its transport identity in `./data` on the host. For a new Linux installation, prepare it for the container's UID/GID 10001 before running backend commands:
+
+```sh
+sudo install -d -m 0700 -o 10001 -g 10001 ./data
+```
+
+For an existing named-volume installation, migrate the data as described below instead of starting with an empty directory.
+
 ### 2. Build the image
 
 ```sh
@@ -216,9 +224,29 @@ Database timestamps and calculated deadline instants are stored in UTC. Each acc
 
 ## Data and manual backups
 
-The Compose named volume **`taskboard-backend-data`** holds `/data/taskboard.db`, its SQLite sidecar files, and `/data/rtn` backend identity/enrollment state. The separate **`taskboard-gateway-data`** volume holds the enrolled gateway identity. Compose prefixes actual volume names with the project name. This split deployment is a forward-only change and does not automatically adopt the old combined-container volume.
+Both backend Compose configurations bind-mount **`./data:/data`**. The SQLite database is `./data/taskboard.db` on the host, alongside its SQLite sidecar files and `./data/rtn` backend identity/enrollment state. This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
 
-Rebuilding the image or using `docker compose down` preserves the named volume. **`docker compose down -v` deletes it and its application data.**
+Rebuilding images or using `docker compose down` preserves this data. `docker compose down -v` does not delete the bind-mounted host directory, but **does delete the gateway's named volume and enrolled identity**.
+
+### Migrating an existing backend named volume
+
+On the backend host, before recreating or removing the existing backend container, stop it and copy its entire `/data` directory. Only use these commands when `./data` does not already exist; otherwise stop and reconcile the existing directory first. The old container must still have its original named-volume mount.
+
+```sh
+# Confirm this prints a volume mount at /data, not the new bind mount.
+docker inspect rtn-taskboard-backend-1 --format '{{json .Mounts}}'
+test ! -e ./data && docker compose -f compose.backend.yaml stop backend && docker compose -f compose.backend.yaml cp backend:/data ./data
+```
+
+After the copy succeeds, on Linux set ownership for the non-root backend and recreate it:
+
+```sh
+sudo chown -R 10001:10001 ./data
+sudo chmod 0700 ./data ./data/rtn
+docker compose -f compose.backend.yaml up -d backend
+```
+
+Use `compose.yaml` instead for the combined deployment. This preserves the database, SQLite sidecars, and backend identity/enrollment state; no new join code is needed. The old named volume is not removed and remains available for recovery. If the old container has already been removed, recover from its named volume before starting the new backend; do not initialize an empty directory over an existing installation.
 
 Backup scheduling and retention are yours to manage. For a simple consistent manual copy, stop the app, copy the complete data directory into a new timestamped destination, then start it again:
 
