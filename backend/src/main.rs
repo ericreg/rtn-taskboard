@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         auth::seed(&state, email, name, password.trim_end_matches(['\r', '\n']))
             .await
             .map_err(|e| anyhow::anyhow!(e.2))?;
-        state.pool.close().await;
+        state.db.checkpoint().await?;
         println!(
             "Database seeded with the first editor and backend identity. Sign in with {email}."
         );
@@ -47,16 +47,13 @@ async fn main() -> anyhow::Result<()> {
     );
     let state = AppState::new(config).await?;
     if args.get(1).map(String::as_str) == Some("issue-gateway-code") {
-        let code = taskboard::mesh::issue_gateway_code(&state.config).await?;
-        state.pool.close().await;
+        let code = taskboard::mesh::issue_gateway_code(&state).await?;
+        state.db.checkpoint().await?;
         println!("{code}");
         return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("invalidate-sessions") {
-        sqlx::query(
-            "DELETE FROM sessions; DELETE FROM account_tokens; DELETE FROM discord_link_tokens;",
-        )
-        .execute(&state.pool)
+        state.db.connect().await?.execute_batch("BEGIN IMMEDIATE; DELETE FROM sessions; DELETE FROM account_tokens; DELETE FROM discord_link_tokens; COMMIT;")
         .await?;
         println!("Sessions and outstanding account/link tokens invalidated.");
         return Ok(());
@@ -70,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let mesh = taskboard::mesh::backend(&state.config).await?;
+    let mesh = taskboard::mesh::backend(&state).await?;
     mesh.online(std::time::Duration::from_secs(30)).await?;
     let jobs = tokio::spawn(taskboard::jobs::run(state.clone()));
     let discord = state
@@ -85,16 +82,21 @@ async fn main() -> anyhow::Result<()> {
         result=&mut tunnel=>match result{Ok(Ok(()))=>Err(anyhow::anyhow!("Taskboard tunnel stopped unexpectedly")),Ok(Err(error))=>Err(error),Err(error)=>Err(error.into())},
     };
     jobs.abort();
-    tunnel.abort();
+    let _ = jobs.await;
+    if !tunnel.is_finished() {
+        tunnel.abort();
+        let _ = tunnel.await;
+    }
     if let Some(discord) = discord {
         discord.abort();
+        let _ = discord.await;
     }
     let _ = mesh
         .shutdown(rtn_mq::ShutdownMode::Drain {
             timeout: std::time::Duration::from_secs(10),
         })
         .await;
-    state.pool.close().await;
+    state.db.checkpoint().await?;
     outcome
 }
 

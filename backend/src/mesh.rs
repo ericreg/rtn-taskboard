@@ -1,4 +1,4 @@
-use crate::config::Config as TaskboardConfig;
+use crate::state::AppState;
 use anyhow::Context;
 use rtn_mq::{Config, JoinOptions, MAX_JOIN_LIFETIME, MessagingEndpoint, Permission, ShutdownMode};
 use std::{sync::Arc, time::Duration};
@@ -6,15 +6,15 @@ use taskboard_wire::{REQUEST_TOPIC, RESPONSE_TOPIC};
 
 mod storage;
 
-pub async fn backend(config: &TaskboardConfig) -> anyhow::Result<MessagingEndpoint> {
-    backend_with_transport(config, transport_config(config.rtn_relay_only)).await
+pub async fn backend(state: &AppState) -> anyhow::Result<MessagingEndpoint> {
+    backend_with_transport(state, transport_config(state.config.rtn_relay_only)).await
 }
 
 async fn backend_with_transport(
-    config: &TaskboardConfig,
+    state: &AppState,
     transport: Config,
 ) -> anyhow::Result<MessagingEndpoint> {
-    let (identity, storage) = storage::DatabaseStorage::open(&config.database)?;
+    let (identity, storage) = storage::DatabaseStorage::open(&state.db).await?;
     MessagingEndpoint::host_with_storage(
         transport,
         identity,
@@ -28,8 +28,8 @@ async fn backend_with_transport(
     .context("start persistent rtn-mq backend")
 }
 
-pub async fn issue_gateway_code(config: &TaskboardConfig) -> anyhow::Result<String> {
-    let endpoint = backend(config).await?;
+pub async fn issue_gateway_code(state: &AppState) -> anyhow::Result<String> {
+    let endpoint = backend(state).await?;
     let result: anyhow::Result<String> = async {
         endpoint
             .online(Duration::from_secs(30))
@@ -62,7 +62,7 @@ pub fn transport_config(relay_only: bool) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth, state::AppState};
+    use crate::{auth, config::Config as TaskboardConfig};
     use rtn_mq::{HostStorage, Identity, RelayMode};
 
     fn local_transport() -> Config {
@@ -73,7 +73,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_preserves_identity_grants_and_redeemed_membership_across_restarts() {
+    async fn turso_preserves_identity_grants_and_redeemed_membership_across_restarts() {
         let directory = tempfile::tempdir().unwrap();
         let config = TaskboardConfig {
             database: directory.path().join("taskboard.db"),
@@ -87,7 +87,7 @@ mod tests {
         };
         let state = AppState::new(config.clone()).await.unwrap();
         assert!(
-            backend_with_transport(&config, local_transport())
+            backend_with_transport(&state, local_transport())
                 .await
                 .is_err()
         );
@@ -104,7 +104,7 @@ mod tests {
         drop(socket);
         let mut transport = local_transport();
         transport.bind_addr = Some(address);
-        let host = backend_with_transport(&config, transport.clone())
+        let host = backend_with_transport(&state, transport.clone())
             .await
             .unwrap();
         let host_id = host.endpoint_id();
@@ -113,10 +113,12 @@ mod tests {
         let code = host.issue_join_code(options).await.unwrap();
         host.shutdown(ShutdownMode::Immediate).await.unwrap();
         drop(host);
-        state.pool.close().await;
+        state.db.checkpoint().await.unwrap();
+        drop(state);
+        let state = AppState::new(config.clone()).await.unwrap();
 
         // The issued, unredeemed grant survives a complete database/host restart.
-        let host = backend_with_transport(&config, transport.clone())
+        let host = backend_with_transport(&state, transport.clone())
             .await
             .unwrap();
         assert_eq!(host.endpoint_id(), host_id);
@@ -129,8 +131,12 @@ mod tests {
         drop(gateway);
         drop(host);
 
+        state.db.checkpoint().await.unwrap();
+        drop(state);
+        let state = AppState::new(config.clone()).await.unwrap();
+
         // The original gateway can resume; a different key cannot consume the code again.
-        let host = backend_with_transport(&config, transport).await.unwrap();
+        let host = backend_with_transport(&state, transport).await.unwrap();
         assert_eq!(host.endpoint_id(), host_id);
         let gateway = MessagingEndpoint::join(local_transport(), gateway_identity, &code)
             .await
@@ -145,8 +151,8 @@ mod tests {
         drop(host);
 
         // A stale writer must never undo another process's recorded enrollment.
-        let (_, first) = storage::DatabaseStorage::open(&config.database).unwrap();
-        let (_, stale) = storage::DatabaseStorage::open(&config.database).unwrap();
+        let (_, first) = storage::DatabaseStorage::open(&state.db).await.unwrap();
+        let (_, stale) = storage::DatabaseStorage::open(&state.db).await.unwrap();
         let snapshot = first.load().unwrap().unwrap();
         first.save(&snapshot).unwrap();
         assert!(stale.save(&snapshot).is_err());

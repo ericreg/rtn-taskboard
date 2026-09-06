@@ -27,14 +27,18 @@ seed $email="" $name="": prepare-data
     printf '%s\n' "$password" | docker compose -f compose.backend.yaml run --rm -T backend seed "$email" "$name"
 
 # Build the backend image.
+backend:
+    docker compose -f compose.backend.yaml build backend
+
+# Build, seed, and generate a gateway enrollment code for a fresh backend.
 init-backend $email="" $name="":
     just prepare-data
 
     # build the backend image
-    docker compose -f compose.backend.yaml build backend
+    just backend
     
     # seed the backend database
-    just seed email="$email" name="$name"
+    just seed "$email" "$name"
 
     # make a join code
     just join-code

@@ -14,8 +14,8 @@ Confirmed requirements:
 - Tasks support due dates, embedded images, and GitHub links.
 - Long-form text uses Markdown, including syntax highlighting in fenced code blocks.
 - Deleted tasks move to an Archive until explicitly permanently deleted.
-- The frontend uses **Svelte and TypeScript**; the backend uses **Rust and SQLite**.
-- Authentication happens inside Taskboard using email and password, with credentials stored securely in SQLite.
+- The frontend uses **Svelte and TypeScript**; the backend uses **Rust and Turso**.
+- Authentication happens inside Taskboard using email and password, with credentials stored securely in Turso.
 - The app supports light and dark themes.
 - A Discord bot lets linked users list, finish, cancel, and delete tasks, and delivers due-date and watcher activity notifications.
 
@@ -102,7 +102,7 @@ Task status and archive state are separate fields.
 - Highlight common languages including Rust, TypeScript, JavaScript, JSON, SQL, Bash, HTML, and CSS. Unknown language names fall back to escaped plain code.
 - Offer image upload through file selection, drag-and-drop, and clipboard paste. Save a new task before accepting uploads so every file has a durable owner.
 - Initially accept PNG, JPEG, WebP, and GIF with a configurable 10 MiB per-file limit and image-dimension limits. Validate decoded content and reject HTML/SVG uploads in the first release.
-- Store image metadata in SQLite and bytes in a private uploads directory on persistent disk. Serve images through authenticated Rust endpoints with ownership/access checks.
+- Store image metadata in Turso and bytes in a private uploads directory on persistent disk. Serve images through authenticated Rust endpoints with ownership/access checks.
 - Bind attachments to exactly one project or task; task comments reuse that task's attachments. Removing an inline image reference does not automatically destroy the attachment.
 - Upload company images for inline rendering. Treat external image URLs as links in the first release, avoiding unauthenticated third-party image loads from private descriptions.
 - Store GitHub links as URLs with optional labels and a link type; also allow ordinary Markdown links. Validate URL schemes and recognize GitHub URLs without contacting GitHub.
@@ -113,7 +113,7 @@ Proposed rendering pipeline: parse Markdown with raw HTML disabled, apply syntax
 ### Themes and usability
 
 - Offer Light, Dark, and System appearance options. Default to the operating system preference.
-- Persist the signed-in user's preference in SQLite and cache it locally to apply the theme before the first paint.
+- Persist the signed-in user's preference in Turso and cache it locally to apply the theme before the first paint.
 - Use shared color tokens for surfaces, text, borders, status indicators, and syntax highlighting.
 - Support keyboard navigation, visible focus, labeled controls, readable contrast, and status indicators that include text as well as color.
 - Make the task list and detail view usable on mobile; allow horizontal scrolling for the board.
@@ -144,9 +144,9 @@ Navigation uses a persistent sidebar on desktop and a compact menu on mobile. Ta
 - Provision the initial editor with a one-time server-side setup command. Invited accounts begin as viewers.
 - Editors create expiring invitations tied to an email address and distribute the links through existing company channels. Employees choose their own password in Taskboard.
 - Normalize email addresses consistently and enforce uniqueness. An email-domain check alone is insufficient to establish company membership.
-- Store **salted Argon2id password hashes**, including algorithm parameters, in SQLite. Password authentication needs one-way hashing rather than recoverable encryption. Start from OWASP's Argon2id baseline and benchmark its cost on the deployment host. [OWASP password storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+- Store **salted Argon2id password hashes**, including algorithm parameters, in Turso. Password authentication needs one-way hashing rather than recoverable encryption. Start from OWASP's Argon2id baseline and benchmark its cost on the deployment host. [OWASP password storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - Proposed password policy: allow long passphrases and password managers, require at least 15 characters, and avoid composition rules. Bound input sizes and concurrent hash operations.
-- Use random opaque session tokens in `HttpOnly`, `Secure`, `SameSite=Lax` cookies. Store token hashes and expiry times in SQLite; do not store authentication tokens in browser local storage.
+- Use random opaque session tokens in `HttpOnly`, `Secure`, `SameSite=Lax` cookies. Store token hashes and expiry times in Turso; do not store authentication tokens in browser local storage.
 - Proposed sessions expire after seven days, with logout, password reset, and account deactivation revoking sessions. Require the current password to change it while signed in.
 - Protect state-changing requests with CSRF tokens and origin validation; rate-limit login, registration, reset, and account-linking attempts.
 - For initial password recovery, an editor verifies the employee through existing company channels and issues a short-lived, single-use reset link. SMTP-based self-service recovery can follow later.
@@ -174,7 +174,7 @@ Use a single Rust application with modules for HTTP routes, domain services, dat
 flowchart LR
     Browser["Browser: Svelte + TypeScript"] -->|HTTPS| Web["Rust HTTP API + static assets"]
     Web --> Services["Shared application services"]
-    Services --> DB[(SQLite)]
+    Services --> DB[(Turso)]
     Services --> Files["Private image storage"]
     Bot["Rust Discord adapter"] --> Services
     Bot -->|Outbound Gateway connection| Discord["Discord"]
@@ -190,13 +190,13 @@ flowchart LR
 | Frontend | Svelte with strict TypeScript for typed components and shared UI patterns |
 | Build | Vite; build a client-rendered app with client-side routing and deep-link fallback |
 | Backend | Rust, Axum, and Tokio for HTTP handlers and asynchronous workers |
-| Database | SQLite with SQLx for queries, transactions, and versioned migrations |
+| Database | Embedded Turso with its native Rust SDK, parameterized queries, and transactions |
 | Passwords | A maintained Rust Argon2 implementation supporting Argon2id |
 | Discord | Serenity, isolated behind a small adapter calling the same task services as HTTP |
 | API | JSON REST API with an OpenAPI contract and generated TypeScript request/response types |
 | Styling | Shared CSS variables and reusable Svelte components |
 
-Svelte supports TypeScript in components and Vite integration. Axum, SQLx, and Serenity provide the proposed Rust building blocks. Choose compatible maintained versions during setup and commit lockfiles. [Svelte TypeScript documentation](https://svelte.dev/docs/svelte/typescript), [Vite guide](https://vite.dev/guide/), [Axum documentation](https://docs.rs/axum/latest/axum/), [SQLx documentation](https://docs.rs/sqlx/latest/sqlx/), [Serenity documentation](https://docs.rs/serenity/latest/serenity/)
+Svelte supports TypeScript in components and Vite integration. Axum, Turso, and Serenity provide the proposed Rust building blocks. Choose compatible maintained versions during setup and commit lockfiles. [Svelte TypeScript documentation](https://svelte.dev/docs/svelte/typescript), [Vite guide](https://vite.dev/guide/), [Axum documentation](https://docs.rs/axum/latest/axum/), [Turso Rust SDK](https://github.com/tursodatabase/turso/tree/main/bindings/rust), [Serenity documentation](https://docs.rs/serenity/latest/serenity/)
 
 - Node.js is needed to develop and build the frontend; production runs the Rust service and compiled static files.
 - Keep task validation, permission checks, status transitions, and activity creation in domain services. The Discord adapter must not bypass these through direct SQL mutations.
@@ -221,7 +221,7 @@ taskboard/
     src/db/
     src/discord/
     src/jobs/
-    migrations/
+    schema.sql
     tests/
   docs/
     operations.md
@@ -232,9 +232,9 @@ taskboard/
   .env.example
 ```
 
-## 6. SQLite data model
+## 6. Turso data model
 
-This is a logical schema; migrations will define exact types, checks, and indexes. Store ordinary timestamps as UTC instants. Store Discord snowflake IDs as strings in the API and database to avoid JavaScript integer precision loss.
+This is a logical schema; `backend/schema.sql` defines exact types, checks, and indexes. Store ordinary timestamps as UTC instants. Store Discord snowflake IDs as strings in the API and database to avoid JavaScript integer precision loss.
 
 | Table | Main fields / purpose |
 | --- | --- |
@@ -260,16 +260,16 @@ This is a logical schema; migrations will define exact types, checks, and indexe
 
 Constraints and query design:
 
-- `tasks.project_id` is `NOT NULL`, references `projects.id`, and restricts project deletion. Enable foreign-key enforcement on every database connection. [SQLite foreign keys](https://www.sqlite.org/foreignkeys.html)
+- `tasks.project_id` is `NOT NULL`, references `projects.id`, and restricts project deletion. Enable foreign-key enforcement on every database connection. [Turso SQL compatibility](https://github.com/tursodatabase/turso/blob/main/COMPAT.md)
 - Validate status and role values; make watcher pairs, normalized emails, tokens, and linked Discord identities unique.
 - Enforce exactly one attachment owner with a database check constraint.
 - Index active tasks by project/status, assignee, and due date; index archived tasks by deletion time; index comments/activity by task and time; index notifications by recipient/read state and deliveries by next attempt.
-- Use parameterized queries, pagination, and bounded result sizes. Begin with bounded title/description search; introduce SQLite FTS if measured search performance requires it.
+- Use parameterized queries, pagination, and bounded result sizes. Begin with bounded title/description search; introduce Turso FTS if measured search performance requires it.
 - Increment entity versions atomically on changes. Updates specify the expected version; stale writes return a conflict with the latest version.
 - Commit a task change, its activity event, and resulting notification records/delivery jobs in one transaction. Network delivery happens after commit.
 - Permanent deletion clears related content and enqueues file removal in the same database transaction. File cleanup is retried separately; do not assume a database transaction can roll back filesystem deletion.
 
-Use WAL mode on local persistent disk, an explicit busy timeout, and a small connection pool. SQLite still permits only one writer at a time; WAL helps readers and a writer proceed concurrently. This favors the proposed single-instance deployment. [SQLite WAL documentation](https://www.sqlite.org/wal.html)
+Use embedded Turso on local persistent disk with an explicit busy timeout, foreign keys, and full synchronous durability on each connection. Connections share one database handle inside a single backend process. Use immediate write transactions; stop the backend before database CLI commands. [Turso Rust SDK](https://github.com/tursodatabase/turso/tree/main/bindings/rust)
 
 ## 7. API outline
 
@@ -303,7 +303,7 @@ All application endpoints use `/api/v1`. Require authentication except for narro
 
 The requested Discord “API key” will be a **bot token** associated with a Discord application. An operator creates the application and bot, installs it into the company server with bot and application-command access, and supplies the application ID, server ID, and bot token to the deployment. Gateway connections authenticate with the bot token. [Discord Gateway documentation](https://docs.discord.com/developers/events/gateway)
 
-- Keep the bot token in deployment secrets or a server environment variable, never in frontend code, API responses, logs, or Git. Store only non-secret configuration in SQLite.
+- Keep the bot token in deployment secrets or a server environment variable, never in frontend code, API responses, logs, or Git. Store only non-secret configuration in Turso.
 - Use an outbound Discord Gateway connection for incoming commands. This suits an internal Taskboard server because it does not require exposing an incoming Discord webhook endpoint.
 - Register commands for the configured company server. Limit the bot to that server and request only needed permissions and intents; the initial commands do not read ordinary message content.
 - Workspace management shows enabled/disabled state, connection health, configured server, and recent delivery errors. Missing credentials disable Discord without preventing the website from running.
@@ -353,7 +353,7 @@ Commands authorize by the linked Taskboard account and its current active state,
 - Users can watch and unwatch tasks. Subscribe the creator on creation; later unwatching remains effective. Assignment alone does not require an activity subscription.
 - Notify watchers about title/description changes, status changes, assignment, due dates, comments, attachment/link additions, deletion to Archive, and restoration. Suppress notifications to the actor for their own activity.
 - Combine field changes from one save into one activity event and one notification per recipient. Watch/unwatch operations do not notify other watchers.
-- Persist jobs in SQLite, with delivery states such as pending, leased, sent, retry, failed, and canceled. Recover expired leases after restart.
+- Persist jobs in Turso, with delivery states such as pending, leased, sent, retry, failed, and canceled. Recover expired leases after restart.
 - Give activity notifications a unique event/recipient key and due reminders a unique task/reminder-revision/recipient/slot key.
 - Before sending, recheck account activity, linking, preferences, and task eligibility. Drop stale due reminders; archive/restore activity notifications remain deliverable when relevant.
 - Retry temporary failures with backoff, respect Discord rate limits, and surface permanent failures such as blocked DMs. After downtime, collapse obsolete reminder slots into at most one relevant catch-up reminder per task and recipient.
@@ -362,10 +362,10 @@ Commands authorize by the linked Taskboard account and its current active state,
 ## 9. Deployment and operations
 
 - Run one application instance behind HTTPS, on the company network/VPN or another access-controlled host. Configure the external base URL for browser and Discord links.
-- Persist the SQLite database and uploads directory outside the container image. Do not put an active WAL database on a network filesystem or ephemeral deployment disk.
+- Persist the Turso database and uploads directory outside the container image. Do not put an active WAL database on a network filesystem or ephemeral deployment disk.
 - Configure paths, session duration, upload limits, and optional Discord secrets through documented environment variables and workspace management where appropriate. Users select their own local time zones while stored timestamps remain UTC.
-- Apply versioned database migrations in a controlled startup/deployment step. Back up before schema changes; document recovery when a migration cannot be reversed safely.
-- For a simple consistent backup, briefly pause writes and file cleanup, take a supported SQLite backup, and copy the corresponding immutable uploads before resuming. A raw copy of an active main database file alone is not a safe WAL backup strategy. [SQLite backup API](https://www.sqlite.org/backup.html)
+- Initialize a fresh, version-marked Turso schema at setup. This release is a breaking change: reject previous databases and seed a new installation without importing old data.
+- For a consistent backup, stop the backend and copy its complete data directory, including WAL files. Resume only after the copy finishes. Keep backups private.
 - Proposed backup policy: daily encrypted backups to separate storage, retained for 30 days, with a documented restore drill before launch. Initial recovery targets are at most 24 hours of lost data and restoration within four hours; validate these against company needs and actual measurements.
 - Before reopening a restored backup, invalidate sessions and outstanding invitation/reset/link tokens, reconcile account deactivations and purges since the snapshot with the operator, and discard obsolete notification deliveries. Confirm the current employee roster before reconnecting Discord and resuming access.
 - Log request IDs, errors, administrative actions, and job outcomes without passwords, tokens, full task bodies, or attachment contents.
@@ -378,7 +378,7 @@ Complete these phases in order. Discord is part of the first release; the pilot 
 
 | Phase | Work | Exit criteria |
 | --- | --- | --- |
-| 1. Foundation | Repository structure, Svelte/TypeScript shell, Rust service, SQLite migrations, authentication, roles, shared theme tokens, CI | Invited users can register/sign in; unauthorized API access fails; theme persists |
+| 1. Foundation | Repository structure, Svelte/TypeScript shell, Rust service, Turso schema initialization, authentication, roles, shared theme tokens, CI | Invited users can register/sign in; unauthorized API access fails; theme persists |
 | 2. Projects and tasks | Project CRUD/archive, task CRUD, statuses, assignment, list/board, search, date fields, concurrency handling | Every task has a project; members can manage shared work; stale edits produce a recoverable conflict |
 | 3. Content and Archive | Markdown editor/preview, highlighting, images, GitHub links, comments, task archive/restore/purge | Markdown renders safely; attachments require authentication; restore preserves content; purge cleans up owned data/files |
 | 4. Activity and reminders | Watchers, activity events, notification preferences, in-app inbox, durable scheduler and delivery jobs | Meaningful changes notify the right users; terminal/archived tasks receive no due reminders; jobs survive restart |
@@ -389,7 +389,7 @@ For adoption, pilot with one active project, collect feedback, then move the tea
 
 ## 11. Validation and release acceptance
 
-Use focused Rust service/integration tests with temporary SQLite databases, frontend component tests where behavior warrants them, and browser end-to-end tests for key workflows. Test the Discord adapter with mocked provider responses and a dedicated test server for final verification.
+Use focused Rust service/integration tests with temporary Turso databases, frontend component tests where behavior warrants them, and browser end-to-end tests for key workflows. Test the Discord adapter with mocked provider responses and a dedicated test server for final verification.
 
 - [ ] An invited employee registers and signs in; duplicate email, invalid invitation, expired session, logout, reset, and deactivation behave correctly.
 - [ ] Both roles can access all projects. Viewers cannot mutate project or task content or call editor-only management endpoints.

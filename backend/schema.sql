@@ -74,7 +74,7 @@ CREATE TABLE attachment_chunks (
  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
  sequence INTEGER NOT NULL, data BLOB NOT NULL,
  PRIMARY KEY(attachment_id,sequence)
-) WITHOUT ROWID;
+);
 CREATE TABLE task_watchers (
  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -133,3 +133,10 @@ CREATE TABLE admin_audit_log (
  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE rtn_identity (
+ id INTEGER PRIMARY KEY CHECK(id = 1),
+ private_key BLOB NOT NULL CHECK(typeof(private_key) = 'blob' AND length(private_key) = 32),
+ host_state BLOB NOT NULL CHECK(typeof(host_state) = 'blob' AND length(host_state) BETWEEN 1 AND 4194304),
+ revision INTEGER NOT NULL DEFAULT 0
+);

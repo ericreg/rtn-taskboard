@@ -2,7 +2,8 @@ use anyhow::{Context, ensure};
 use std::{env, path::PathBuf};
 
 fn gib_to_bytes(value: &str) -> anyhow::Result<u64> {
-    value.parse::<u64>()
+    value
+        .parse::<u64>()
         .context("TASKBOARD_MAX_DB_GIB must be a nonnegative whole number (0 means unlimited)")?
         .checked_mul(1024 * 1024 * 1024)
         .context("TASKBOARD_MAX_DB_GIB is too large")
@@ -12,7 +13,10 @@ fn mib_to_bytes(value: &str) -> anyhow::Result<u64> {
     let value = value
         .parse::<u64>()
         .context("TASKBOARD_MAX_IMAGE_MIB must be a positive whole number")?;
-    ensure!(value > 0, "TASKBOARD_MAX_IMAGE_MIB must be greater than zero");
+    ensure!(
+        value > 0,
+        "TASKBOARD_MAX_IMAGE_MIB must be greater than zero"
+    );
     value
         .checked_mul(1024 * 1024)
         .context("TASKBOARD_MAX_IMAGE_MIB is too large")
@@ -32,23 +36,52 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let get = |k: &str, default: &str| env::var(k).unwrap_or_else(|_| default.into());
-        let base_url = get("TASKBOARD_BASE_URL", "http://localhost:8080").trim_end_matches('/').to_string();
+        let base_url = get("TASKBOARD_BASE_URL", "http://localhost:8080")
+            .trim_end_matches('/')
+            .to_string();
         let parsed = url::Url::parse(&base_url).context("Invalid TASKBOARD_BASE_URL")?;
-        ensure!(matches!(parsed.scheme(), "http" | "https") && parsed.path() == "/" && parsed.query().is_none() && parsed.fragment().is_none(), "TASKBOARD_BASE_URL must be an http(s) origin without a path");
-        let token = env::var("TASKBOARD_DISCORD_TOKEN").ok().filter(|s| !s.is_empty());
-        let guild = env::var("TASKBOARD_DISCORD_GUILD_ID").ok().filter(|s| !s.is_empty()).map(|s| s.parse()).transpose().context("Invalid Discord server ID")?;
-        ensure!(token.is_none() || guild.is_some(), "TASKBOARD_DISCORD_GUILD_ID is required with a bot token");
+        ensure!(
+            matches!(parsed.scheme(), "http" | "https")
+                && parsed.path() == "/"
+                && parsed.query().is_none()
+                && parsed.fragment().is_none(),
+            "TASKBOARD_BASE_URL must be an http(s) origin without a path"
+        );
+        let token = env::var("TASKBOARD_DISCORD_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let guild = env::var("TASKBOARD_DISCORD_GUILD_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse())
+            .transpose()
+            .context("Invalid Discord server ID")?;
+        ensure!(
+            token.is_none() || guild.is_some(),
+            "TASKBOARD_DISCORD_GUILD_ID is required with a bot token"
+        );
         let max_db_bytes = gib_to_bytes(&get("TASKBOARD_MAX_DB_GIB", "0"))?;
         let max_image_bytes = mib_to_bytes(&get("TASKBOARD_MAX_IMAGE_MIB", "10"))?;
         Ok(Self {
             database: get("TASKBOARD_DATABASE", "data/taskboard.db").into(),
             max_db_bytes,
             max_image_bytes,
-            secure_cookies: get("TASKBOARD_SECURE_COOKIES", if parsed.scheme() == "https" { "true" } else { "false" }).parse().context("Invalid TASKBOARD_SECURE_COOKIES")?,
+            secure_cookies: get(
+                "TASKBOARD_SECURE_COOKIES",
+                if parsed.scheme() == "https" {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .parse()
+            .context("Invalid TASKBOARD_SECURE_COOKIES")?,
             base_url,
             discord_token: token,
             discord_guild: guild,
-            rtn_relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "true").parse().context("Invalid TASKBOARD_RTN_RELAY_ONLY")?,
+            rtn_relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "true")
+                .parse()
+                .context("Invalid TASKBOARD_RTN_RELAY_ONLY")?,
         })
     }
 }

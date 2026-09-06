@@ -1,11 +1,17 @@
 # Taskboard
 
-A self-hosted project management app built with Svelte, TypeScript, Rust, SQLite, and `rtn-mq`. It deploys as two non-root `scratch` containers:
+A self-hosted project management app built with Svelte, TypeScript, Rust, [Turso](https://github.com/tursodatabase/turso), and `rtn-mq`. It deploys as two non-root `scratch` containers:
 
 - The public **gateway** serves the compiled frontend and forwards same-origin `/api/v1` requests.
-- The private **backend** owns SQLite, authorization, jobs, and the optional Discord bot. It has no HTTP listener or published port.
+- The private **backend** owns Turso, authorization, jobs, and the optional Discord bot. It has no HTTP listener or published port.
 
 The containers exchange signed, acknowledged, streaming frames over an Iroh relay. The browser uses ordinary HTTPS, cookies, and CSRF protection; it never receives the join code or an Iroh key. See [Split deployment](DEPLOYMENT.md) for the remote-server setup and security model.
+
+## Breaking storage change
+
+This release uses Turso's native embedded Rust engine (`turso` 0.8.0-pre.8). No cloud account, server, or database token is required. The old database drivers and migrations have been removed. Existing databases are rejected; there is no import or upgrade path.
+
+For an existing installation, stop both services and preserve the complete old backend data directory separately. Start with a fresh `./data`, run `just backend`, `just seed`, and `just join-code`, then replace the gateway's join code and restart both services. Seeding creates a new editor and backend identity; previous users, content, and enrollment grants are not carried forward. Keep old backups separate from Turso backups.
 
 ## Quick start
 
@@ -42,14 +48,14 @@ Discord is optional. Leave its token and server ID empty unless you want to enab
 export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
 ```
 
-The backend stores SQLite and its transport identity in `./data` on the host. The backend recipes create this directory as your user. For a new installation using Compose directly, create it first so Docker does not create a root-owned bind-mount directory:
+The backend stores Turso and its transport identity in `./data` on the host. The backend recipes create this directory as your user. For a new installation using Compose directly, create it first so Docker does not create a root-owned bind-mount directory:
 
 ```sh
 umask 077
 mkdir -p ./data
 ```
 
-For an existing named-volume installation, migrate the data as described below instead of starting with an empty directory. For files already owned by UID 10001, follow [Changing the container user](#changing-the-container-user).
+For a previous release, follow [Breaking storage change](#breaking-storage-change). For an existing Turso installation whose files are owned by UID 10001, follow [Changing the container user](#changing-the-container-user).
 
 ### 2. Set up the backend
 
@@ -72,7 +78,7 @@ just seed "you@company.com" "Your Name"
 
 The underlying command is `taskboard seed EMAIL [NAME]`, with the password on stdin. It creates the database schema and commits the first editor, a generated backend private key, and the CBOR authority/enrollment state together. Everything is stored in `taskboard.db`; no backend `.key` or `.cbor` files are written. Seeding runs offline and refuses to overwrite an installation that already has users or a backend identity. Passwords are stored as salted Argon2id hashes. There are no default login credentials.
 
-`just join-code` connects to the relay using the seeded identity and persists the one-use enrollment grant in SQLite. Run it while the backend service is stopped. Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in the gateway host's `.env` (the same `.env` for a local deployment).
+`just join-code` connects to the relay using the seeded identity and persists the one-use enrollment grant in Turso. Run it while the backend service is stopped. Copy the single `rtn-mq://join/...` line into `TASKBOARD_RTN_JOIN_CODE` in the gateway host's `.env` (the same `.env` for a local deployment).
 
 `just start-backend` starts the built image and follows its logs. Press `Ctrl+C` to stop following logs; the backend keeps running. After source changes, run `just backend` and then `just start-backend` to rebuild and apply the new image.
 
@@ -97,6 +103,7 @@ Taskboard has two roles. Viewers can browse all projects and tasks and manage th
 | Action | Command |
 | --- | --- |
 | Build the backend image | `just backend` |
+| Build, seed, and generate a code for a fresh backend | `just init-backend` |
 | Initialize a new backend and first editor | `just seed` |
 | Generate a gateway enrollment code (backend stopped) | `just join-code` |
 | Start the backend and follow logs | `just start-backend` |
@@ -109,12 +116,12 @@ Taskboard has two roles. Viewers can browse all projects and tasks and manage th
 | Follow logs | `docker compose logs -f backend gateway` |
 | Check container health | `docker compose ps` |
 | Check the public gateway | `docker compose exec gateway /taskboard-gateway healthcheck` |
-| Report database size and threshold | `docker compose exec backend /taskboard status` |
+| Report database size and threshold (backend stopped) | `docker compose -f compose.backend.yaml run --rm backend status` |
 | Rebuild after source changes | `docker compose up -d --build` |
 | Apply changes to `.env` | `docker compose up -d --force-recreate` |
 | Remove the containers, keeping data | `docker compose down` |
 
-The scratch images have no shell, package manager, Node runtime, or SQLite CLI. Run their binaries directly with `docker compose exec`.
+The scratch images have no shell, package manager, Node runtime, or Turso CLI. Taskboard uses Turso's single-process mode; stop the backend before running `seed`, `status`, `invalidate-sessions`, or `issue-gateway-code`. Live storage status remains available in Workspace management and Discord.
 
 ## Configuration
 
@@ -134,8 +141,8 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | `TASKBOARD_MAX_IMAGE_MIB` | `10` | Maximum size of one uploaded image in whole MiB; must be greater than zero |
 | `TASKBOARD_DISCORD_TOKEN` | Empty | Optional Discord bot token |
 | `TASKBOARD_DISCORD_GUILD_ID` | Empty | Company Discord server ID; required when a bot token is supplied |
-| `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | SQLite database path |
-| `TASKBOARD_RTN_IDENTITY` | `/data/rtn/gateway.key` in the gateway image | Gateway-only private endpoint key; backend key and enrollment state live in SQLite |
+| `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | Turso database path |
+| `TASKBOARD_RTN_IDENTITY` | `/data/rtn/gateway.key` in the gateway image | Gateway-only private endpoint key; backend key and enrollment state live in Turso |
 | `TASKBOARD_GATEWAY_BIND` | `127.0.0.1:8080` in Compose; `0.0.0.0:8080` in the image | Gateway HTTP listener; Compose derives this from `TASKBOARD_PUBLISH_ADDRESS` and port 8080 |
 | `RUST_LOG` | See `.env.example` | Application logging filter |
 
@@ -158,7 +165,7 @@ When upgrading, set `TASKBOARD_GATEWAY_ORIGIN` explicitly if you use anything ot
 
 ## Storage threshold and images
 
-Images are stored **inside SQLite**, in chunks alongside their attachment metadata. They count toward the database threshold. Each image is also limited by the backend's `TASKBOARD_MAX_IMAGE_MIB` setting, which defaults to 10 MiB and is checked against the image bytes rather than multipart overhead.
+Images are stored **inside Turso**, in chunks alongside their attachment metadata. They count toward the database threshold. Each image is also limited by the backend's `TASKBOARD_MAX_IMAGE_MIB` setting, which defaults to 10 MiB and is checked against the image bytes rather than multipart overhead.
 
 To start a fresh database with a 1 GiB threshold:
 
@@ -168,13 +175,13 @@ TASKBOARD_MAX_DB_GIB=1
 
 **This environment variable seeds the setting only when the database is first initialized.** After that, change the persistent threshold in **Workspace management → Storage, under your control**. The UI uses MiB; enter `0` for unlimited. Changing the environment variable alone will not replace an existing saved threshold.
 
-- The threshold measures SQLite's allocated pages, including images and application records.
+- The threshold measures Turso's used pages (`page_count - freelist_count`), including images and application records. Deleted pages become reusable capacity; the database file does not automatically shrink.
 - The per-image limit is container configuration. Change `TASKBOARD_MAX_IMAGE_MIB` and recreate the backend container to update it.
 - Creating content or enlarging task/project text is blocked when storage is full. Content writes that would cross the threshold are rolled back.
 - Viewing, signing in, changing task status, archiving, and permanently deleting tasks remain available.
 - Remove images, permanently delete archived tasks, or raise the threshold to recover space. Moving a task to Archive preserves its content and does not free that space.
-- The threshold is an admission limit for user content, not a hard cap on all disk use. Operational records can still grow, and SQLite's write-ahead log consumes additional space.
-- Uploads are temporarily spooled to the container's `/tmp` directory before being committed to SQLite, so the host needs temporary disk space for them too.
+- The threshold is an admission limit for user content, not a hard cap on all disk use. Operational records can still grow, and Turso's write-ahead log consumes additional space.
+- Uploads are temporarily spooled to the container's `/tmp` directory before being committed to Turso, so the host needs temporary disk space for them too.
 
 View usage in Workspace management, with the `status` CLI subcommand, or with Discord `/status`.
 
@@ -233,7 +240,7 @@ Database timestamps and calculated deadline instants are stored in UTC. Each acc
 
 ## Data and manual backups
 
-Both backend Compose configurations bind-mount **`./data:/data`**. The SQLite database is `./data/taskboard.db` on the host, alongside its SQLite sidecar files. The `rtn_identity` table contains the backend private key and CBOR authority, grants, and redeemed membership state as BLOBs. Seed and startup keep the database and its sidecars private (`0600` on Unix). This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
+Both backend Compose configurations bind-mount **`./data:/data`**. The Turso database is `./data/taskboard.db` on the host, alongside its Turso sidecar files. The `rtn_identity` table contains the backend private key and CBOR authority, grants, and redeemed membership state as BLOBs. Seed and startup keep the database and its sidecars private (`0600` on Unix). This directory is ignored by Git. The separate **`taskboard-gateway-data`** named volume still holds the enrolled gateway identity.
 
 ### Changing the container user
 
@@ -266,25 +273,7 @@ Only the one-off ownership helper runs as root; the application services run as 
 
 Rebuilding images or using `docker compose down` preserves this data. `docker compose down -v` does not delete the bind-mounted host directory, but **does delete the gateway's named volume and enrolled identity**.
 
-### Migrating an existing backend named volume
-
-On the backend host, before recreating or removing the existing backend container, stop it and copy its entire `/data` directory. Only use these commands when `./data` does not already exist; otherwise stop and reconcile the existing directory first. The old container must still have its original named-volume mount.
-
-```sh
-# Confirm this prints a volume mount at /data, not the new bind mount.
-docker inspect rtn-taskboard-backend-1 --format '{{json .Mounts}}'
-test ! -e ./data && docker compose -f compose.backend.yaml stop backend && docker compose -f compose.backend.yaml cp backend:/data ./data
-```
-
-After the copy succeeds, on Linux set ownership for the non-root backend and recreate it:
-
-```sh
-sudo chown -R "$(id -u):$(id -g)" ./data
-sudo chmod 0700 ./data
-docker compose -f compose.backend.yaml up -d backend
-```
-
-Use `compose.yaml` instead for the combined deployment. This preserves the complete database and SQLite sidecars; database-backed identities need no new join code. Installations that still store backend identity/enrollment state in separate files need an explicit migration before using this version; those files are not imported automatically. The old named volume is not removed and remains available for recovery. If the old container has already been removed, recover from its named volume before starting the new backend; do not initialize an empty directory over an existing installation.
+### Manual backups
 
 Backup scheduling and retention are yours to manage. For a simple consistent manual copy, stop the app, copy the complete data directory into a new timestamped destination, then start it again:
 
@@ -301,15 +290,19 @@ The copy is under `$taskboard_backup_dir/data/`. It contains credentials and com
 After restoring an older backup, reconcile account access and content changes since that backup. You can invalidate saved sessions and outstanding invitation/reset/link tokens with:
 
 ```sh
-docker compose exec backend /taskboard invalidate-sessions
+docker compose -f compose.backend.yaml stop backend
+docker compose -f compose.backend.yaml run --rm backend invalidate-sessions
+docker compose -f compose.backend.yaml start backend
 ```
 
 ## Troubleshooting
 
 - **Build reports missing `rtn_mq::HostStorage`, `generate_host_state`, or `topics_ready`:** the adjacent `../rtn-mq` checkout lacks the companion API changes. Publish those changes from the development checkout, then run `git -C ../rtn-mq pull --ff-only` on the build host and retry `just backend`. Docker copies that checkout through the `rtn_mq` build context; clearing its cache cannot add missing source changes.
 - **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove either Taskboard data volume. Do not use Docker Desktop's **Clean / Purge data** option if a volume contains data you need.
+- **Unsupported database:** this is a forward-only storage change. Preserve the old data directory separately and seed a fresh installation; startup never imports old records.
+- **Database is locked:** stop the running backend before using a database CLI command. Run only one backend process per data directory.
 - **Seed reports an initialized database:** users or a backend identity already exist. Seed never resets an account or rotates an existing identity. Sign in to the existing account and use Workspace management for invitations or password reset links.
-- **The backend says it is not seeded:** run `just seed` against the same database before first startup. Older installations with separate backend key/state files require an explicit migration; startup does not import them, and seed will not overwrite their users.
+- **The backend says it is not seeded:** run `just seed` against the same database before first startup. Previous releases require a fresh data directory as described in [Breaking storage change](#breaking-storage-change).
 - **Sign-in or editing fails with a permission error:** if the error says the gateway rejected the browser origin, set `TASKBOARD_GATEWAY_ORIGIN` on the gateway machine to the URL you visit (including scheme and port), then recreate the gateway. Changing the backend's `TASKBOARD_BASE_URL` does not change this policy. For HTTP, secure cookies must be disabled on the backend.
 - **The threshold does not change after editing `.env`:** change it in Workspace management; the environment value initializes new databases only.
 - **Port 8080 is already in use:** stop the conflicting service or change the gateway listener port in Compose and update `TASKBOARD_GATEWAY_ORIGIN` to match the browser URL. Update `TASKBOARD_BASE_URL` too if generated links should use that URL. Host networking has no separate published/container ports.
@@ -319,13 +312,13 @@ docker compose exec backend /taskboard invalidate-sessions
 
 ## Development checks and current verification
 
-The frontend type/build check, all backend workflows, the tunnel protocol tests, and an end-to-end 10 MiB image upload/download through `rtn-mq` pass. The backend workflow suite also verifies that 10 MiB plus one byte is rejected without persistence. Both static `scratch` images build successfully. A running-container smoke test also verified relay-only API traffic, no backend HTTP listener, backend restart/rejoin, and gateway restart with its persisted one-use identity. Live Discord verification remains environment-specific.
+The Rust checks cover Turso-backed backend workflows, atomic seeding, rejection of previous databases, enrollment persistence across restarts, and a 10 MiB image upload/download through `rtn-mq`. The workflow suite also checks that 10 MiB plus one byte is rejected without persistence. Live Discord verification remains environment-specific.
 
 To rerun the existing checks locally, install Rust and Node.js, then run:
 
 ```sh
 cargo test --workspace --all-targets
-cargo clippy -p taskboard-wire -p taskboard-gateway --lib --bins -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
