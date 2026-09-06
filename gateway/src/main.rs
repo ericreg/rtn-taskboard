@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(address = %config.bind, endpoint = %state.endpoint().endpoint_id(), "Taskboard gateway ready");
     let server = axum::serve(
         listener,
-        taskboard_gateway::router(state.clone(), config.frontend)
+        taskboard_gateway::router(state.clone(), config.frontend, config.browser_origin)
             .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown());

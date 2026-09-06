@@ -22,6 +22,10 @@ Someone who gets the code after the legitimate gateway enrolls cannot register a
 
 The join code may be supplied as `TASKBOARD_RTN_JOIN_CODE`. Container environment variables are acceptable when administrators and the container runtime are trusted, but they are visible through container inspection. `TASKBOARD_RTN_JOIN_CODE_FILE` is also supported for a mounted secret. The code is read only by the native gateway process and is never compiled into frontend assets or sent to a browser.
 
+Browser-request protection is enforced at the gateway, before forwarding into the signed tunnel. For methods other than GET, HEAD, and OPTIONS, it rejects `Sec-Fetch-Site: cross-site` and any supplied `Origin` that does not match its configured `TASKBOARD_GATEWAY_ORIGIN`. Null, malformed, and duplicate origins are rejected. Requests without either browser header remain supported for non-browser clients; they still need the backend's session and CSRF credentials for authenticated writes. Login is subject to the gateway check too. This separates [browser CSRF protection](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html) from gateway enrollment.
+
+The gateway uses its configured public origin, not client-supplied `Host`, `Forwarded`, or `X-Forwarded-*` values, so TLS termination does not require trusting those headers. A reverse proxy must preserve the browser's `Origin` and `Sec-Fetch-Site` headers. The private backend has no browser-origin allowlist: it trusts enrolled gateways to perform this check, while independently enforcing user authentication, session-bound CSRF tokens, and permissions.
+
 ## Repository layout and builds
 
 The local builds expect adjacent checkouts:
@@ -47,7 +51,7 @@ The gateway binds directly to `${TASKBOARD_PUBLISH_ADDRESS}:8080`, with `127.0.0
 
 ## 1. Prepare the backend server
 
-Create `.env` from `.env.example`. The public URL is still required on the private backend because it validates browser origins and creates invitation/Discord links:
+Create `.env` from `.env.example`. The public URL on the private backend creates invitation, password-reset, and Discord links; it is not used to validate browser origins:
 
 ```dotenv
 TASKBOARD_BASE_URL=https://tasks.example.com
@@ -83,10 +87,11 @@ There is deliberately no `ports` entry and no HTTP listener inside the backend c
 
 ## 2. Prepare the gateway host
 
-Create its `.env` with the code printed by the backend. The public-origin settings remain backend-only; this keeps backend and Discord secrets out of the gateway container:
+Create its `.env` with the code printed by the backend and the origin users will visit. This browser-origin setting belongs only to the gateway; backend and Discord secrets stay out of its container:
 
 ```dotenv
 TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
+TASKBOARD_GATEWAY_ORIGIN=https://tasks.example.com
 TASKBOARD_RTN_RELAY_ONLY=true
 TASKBOARD_RTN_JOIN_CODE=rtn-mq://join/REPLACE_ME
 ```
@@ -103,6 +108,10 @@ docker compose -f compose.gateway.yaml logs -f gateway
 Keep `taskboard-gateway-data`. Its private key is the identity that consumed the join code. Recreating only the container is safe; deleting this volume produces a new identity that the already-consumed code correctly rejects.
 
 Configure the existing TLS reverse proxy to send `https://tasks.example.com` to `127.0.0.1:8080`. If the gateway container itself should be LAN-accessible, change `TASKBOARD_PUBLISH_ADDRESS`, but this has no effect on backend networking.
+
+For local HTTP instead, set `TASKBOARD_GATEWAY_ORIGIN=http://localhost:8080` (the default) or `http://127.0.0.1:8080`, matching the address you actually open, and use `TASKBOARD_SECURE_COOKIES=false` on the backend. The backend link URL can differ without blocking login or writes.
+
+When upgrading from backend-wide origin validation, rebuild and recreate both services on their respective machines. Set `TASKBOARD_GATEWAY_ORIGIN` on the gateway before upgrading if its browser URL is not the default; it does not inherit the backend's `TASKBOARD_BASE_URL`. Preserve both data volumes and the existing join code.
 
 ## Recovery and operations
 

@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod browser;
+pub use browser::BrowserOrigin;
+
 use anyhow::{Context, anyhow, bail, ensure};
 use axum::{
     Router,
@@ -41,6 +44,7 @@ const MAX_IN_FLIGHT: usize = 128;
 #[derive(Clone)]
 pub struct Config {
     pub bind: String,
+    pub browser_origin: BrowserOrigin,
     pub frontend: PathBuf,
     pub identity: PathBuf,
     pub join_code: JoinCode,
@@ -62,6 +66,11 @@ impl Config {
         };
         Ok(Self {
             bind: get("TASKBOARD_GATEWAY_BIND", "0.0.0.0:8080"),
+            browser_origin: BrowserOrigin::parse(&get(
+                "TASKBOARD_GATEWAY_ORIGIN",
+                "http://localhost:8080",
+            ))
+            .context("Invalid TASKBOARD_GATEWAY_ORIGIN")?,
             frontend: get("TASKBOARD_FRONTEND", "frontend/dist").into(),
             identity: get("TASKBOARD_RTN_IDENTITY", "data/rtn/gateway.key").into(),
             join_code: JoinCode::decode(encoded.trim()).context("decode Taskboard join code")?,
@@ -137,7 +146,7 @@ pub async fn connect(config: &Config) -> anyhow::Result<(GatewayState, Subscript
     ))
 }
 
-pub fn router(state: GatewayState, frontend: PathBuf) -> Router {
+pub fn router(state: GatewayState, frontend: PathBuf, browser_origin: BrowserOrigin) -> Router {
     let static_files =
         ServeDir::new(&frontend).not_found_service(ServeFile::new(frontend.join("index.html")));
     Router::new()
@@ -147,6 +156,10 @@ pub fn router(state: GatewayState, frontend: PathBuf) -> Router {
         .route("/api/v1/{*path}", any(proxy))
         .fallback_service(static_files)
         .layer(DefaultBodyLimit::disable())
+        .layer(middleware::from_fn_with_state(
+            browser_origin,
+            browser::protect,
+        ))
         .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -608,7 +621,6 @@ mod tests {
         )
         .await
         .unwrap();
-        let (token, csrf) = auth::new_session(&backend_state, 1).await.unwrap();
 
         let backend = MessagingEndpoint::host(
             local_transport(),
@@ -650,12 +662,78 @@ mod tests {
             pending: Arc::new(Mutex::new(HashMap::new())),
         };
         let response_task = tokio::spawn(response_loop(responses, state.clone()));
-        let app = router(state.clone(), directory.path().into());
+        // The gateway's public origin deliberately differs from backend link URLs.
+        let app = router(
+            state.clone(),
+            directory.path().into(),
+            BrowserOrigin::parse("https://gateway.test").unwrap(),
+        );
+        let login = call(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ORIGIN, "https://gateway.test")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(
+                    json!({"email":"admin@example.test", "password":"a long test-only passphrase"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = login.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let token = cookie.strip_prefix("taskboard_session=").unwrap();
+        let login: Value =
+            serde_json::from_slice(&login.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let csrf = login["csrf"].as_str().unwrap();
+
+        for (origin, csrf_header) in [
+            ("http://taskboard.test", Some(csrf)),
+            ("https://gateway.test", Some("wrong")),
+            ("https://gateway.test", None),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/v1/projects")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, &cookie);
+            if let Some(csrf) = csrf_header {
+                request = request.header("x-csrf-token", csrf);
+            }
+            let response = call(
+                &app,
+                request
+                    .body(Body::from(
+                        json!({"name":"Must not be created"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
 
         // Login loads these endpoints concurrently. Exercise that burst with
         // authenticated requests and consume every body, not just its headers.
         let mut initial_requests = tokio::task::JoinSet::new();
-        for path in ["auth/me", "projects", "users", "status", "notifications", "tasks"] {
+        for path in [
+            "auth/me",
+            "projects",
+            "users",
+            "status",
+            "notifications",
+            "tasks",
+        ] {
             let app = app.clone();
             let cookie = format!("taskboard_session={token}");
             initial_requests.spawn(async move {
@@ -687,9 +765,9 @@ mod tests {
                 .method("POST")
                 .uri("/api/v1/projects")
                 .header(header::CONTENT_TYPE, "application/json")
-                .header(header::ORIGIN, "http://taskboard.test")
+                .header(header::ORIGIN, "https://gateway.test")
                 .header(header::COOKIE, format!("taskboard_session={token}"))
-                .header("x-csrf-token", &csrf)
+                .header("x-csrf-token", csrf)
                 .body(Body::from(json!({"name":"Through the tunnel"}).to_string()))
                 .unwrap(),
         )
@@ -717,9 +795,9 @@ mod tests {
                     header::CONTENT_TYPE,
                     "multipart/form-data; boundary=image-boundary",
                 )
-                .header(header::ORIGIN, "http://taskboard.test")
+                .header(header::ORIGIN, "https://gateway.test")
                 .header(header::COOKIE, format!("taskboard_session={token}"))
-                .header("x-csrf-token", &csrf)
+                .header("x-csrf-token", csrf)
                 .body(Body::from(multipart))
                 .unwrap(),
         )

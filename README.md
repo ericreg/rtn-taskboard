@@ -25,6 +25,7 @@ If `.env` already exists, edit it instead of overwriting it. For a local first r
 
 ```dotenv
 TASKBOARD_BASE_URL=http://localhost:8080
+TASKBOARD_GATEWAY_ORIGIN=http://localhost:8080
 TASKBOARD_SECURE_COOKIES=false
 TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
 TASKBOARD_MAX_DB_GIB=0
@@ -104,7 +105,8 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TASKBOARD_BASE_URL` | `http://localhost:8080` | Exact browser origin, including scheme and port; also used in invitation and Discord links |
+| `TASKBOARD_BASE_URL` | `http://localhost:8080` | Backend-only public URL for invitation, password-reset, and Discord links; not a browser-origin allowlist |
+| `TASKBOARD_GATEWAY_ORIGIN` | `http://localhost:8080` | Gateway-only allowed browser origin, including scheme and port; independent of the backend link URL |
 | `TASKBOARD_SECURE_COOKIES` | `false` in the example | Use `false` for local HTTP; set `true` when serving the app over HTTPS |
 | `TASKBOARD_PUBLISH_ADDRESS` | `127.0.0.1` | Gateway HTTP bind address in host-networked Compose; set `0.0.0.0` for LAN access |
 | `TASKBOARD_RTN_JOIN_CODE` | Required by gateway | One-use enrollment secret; it never enters browser assets |
@@ -124,15 +126,18 @@ Keep the path settings at their container defaults unless you also adjust the vo
 
 ### Public DNS and HTTPS
 
-Point the website DNS name at the gateway host and terminate TLS there (or in a reverse proxy in front of port 8080). Configure both deployments with the exact public origin:
+Point the website DNS name at the gateway host and terminate TLS there (or in a reverse proxy in front of port 8080). Set the gateway's browser origin and the backend's link URL/cookie policy in their respective deployments:
 
 ```dotenv
 TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
+TASKBOARD_GATEWAY_ORIGIN=https://tasks.example.com
 TASKBOARD_BASE_URL=https://tasks.example.com
 TASKBOARD_SECURE_COOKIES=true
 ```
 
-The DNS and TLS configuration is only for browsers reaching the gateway. The backend needs outbound relay access but no public IP, DNS record, inbound port, Docker port mapping, or firewall rule. The browser URL must exactly match `TASKBOARD_BASE_URL`, or origin-protected write requests will be rejected.
+The DNS and TLS configuration is only for browsers reaching the gateway. The backend needs outbound relay access but no public IP, DNS record, inbound port, Docker port mapping, or firewall rule. Browser-origin validation happens at the gateway against `TASKBOARD_GATEWAY_ORIGIN`, before requests enter the tunnel. `TASKBOARD_BASE_URL` is only for generated links and does not need to match the gateway origin for login or writes to work. The backend still enforces user sessions, CSRF tokens, and permissions.
+
+When upgrading, set `TASKBOARD_GATEWAY_ORIGIN` explicitly if you use anything other than `http://localhost:8080`, then rebuild and recreate both services using their respective Compose files. The gateway does not inherit `TASKBOARD_BASE_URL`. For example, opening `http://127.0.0.1:8080` requires `TASKBOARD_GATEWAY_ORIGIN=http://127.0.0.1:8080` on the gateway machine only. No new join code is needed.
 
 ## Storage threshold and images
 
@@ -238,9 +243,9 @@ docker compose exec backend /taskboard invalidate-sessions
 - **Docker reports `metadata_v2.db: read-only file system`:** free at least several GiB on the host, restart Docker Desktop, then run `docker builder prune -f` to remove unused build cache and retry `docker compose build`. Build-cache pruning does not remove either Taskboard data volume. Do not use Docker Desktop's **Clean / Purge data** option if a volume contains data you need.
 - **First-editor setup reports an existing editor:** bootstrap has already run against this volume. Sign in to that account and use Workspace management for invitations or password reset links.
 - **The app says it needs setup:** run the bootstrap command against the same Compose project and volume as the server.
-- **Sign-in or editing fails with a permission error:** check that your browser's origin matches `TASKBOARD_BASE_URL`. For HTTP, secure cookies must be disabled.
+- **Sign-in or editing fails with a permission error:** if the error says the gateway rejected the browser origin, set `TASKBOARD_GATEWAY_ORIGIN` on the gateway machine to the URL you visit (including scheme and port), then recreate the gateway. Changing the backend's `TASKBOARD_BASE_URL` does not change this policy. For HTTP, secure cookies must be disabled on the backend.
 - **The threshold does not change after editing `.env`:** change it in Workspace management; the environment value initializes new databases only.
-- **Port 8080 is already in use:** stop the conflicting service or change the host port in `compose.yaml` and update `TASKBOARD_BASE_URL` to match. Keep the container port at 8080.
+- **Port 8080 is already in use:** stop the conflicting service or change the gateway listener port in Compose and update `TASKBOARD_GATEWAY_ORIGIN` to match the browser URL. Update `TASKBOARD_BASE_URL` too if generated links should use that URL. Host networking has no separate published/container ports.
 - **Discord stays disconnected:** confirm the bot token, server ID, installation, and outbound connectivity; inspect `docker compose logs backend`.
 - **An image cannot be uploaded:** PNG, JPEG, GIF, and WebP are supported. Check `TASKBOARD_MAX_IMAGE_MIB`, the database threshold, and host free space.
 

@@ -48,7 +48,9 @@ fn png(size:usize)->Vec<u8>{let mut bytes=vec![0;size.max(32)];bytes[..8].copy_f
     let member=f.member().await;let project=f.project().await;
     assert_eq!(send(&f.state,"GET",&format!("/projects/{project}"),Some(&member),None).await.0,StatusCode::OK);
     assert_eq!(send(&f.state,"POST","/admin/tokens",Some(&member),Some(json!({"email":"x@example.test","purpose":"invite"}))).await.0,StatusCode::FORBIDDEN);
-    let request=Request::builder().method("POST").uri("/api/v1/projects").header("Origin","https://untrusted.example").header("Cookie",&f.admin.cookie).header("X-CSRF-Token",&f.admin.csrf).header("Content-Type","application/json").body(Body::from(r#"{"name":"wrong origin"}"#)).unwrap();assert_eq!(http::router(f.state.clone()).oneshot(request).await.unwrap().status(),StatusCode::FORBIDDEN);
+    // An enrolled gateway owns browser-origin policy; backend link URLs do not
+    // restrict authenticated, CSRF-protected requests from that gateway.
+    let request=Request::builder().method("POST").uri("/api/v1/projects").header("Origin","https://gateway.example").header("Cookie",&f.admin.cookie).header("X-CSRF-Token",&f.admin.csrf).header("Content-Type","application/json").body(Body::from(r#"{"name":"different gateway origin"}"#)).unwrap();assert_eq!(http::router(f.state.clone()).oneshot(request).await.unwrap().status(),StatusCode::OK);
     assert_eq!(send(&f.state,"POST","/projects",Some(&member),Some(json!({"name":"Viewers cannot create"}))).await.0,StatusCode::FORBIDDEN);
     assert_eq!(send(&f.state,"PATCH","/admin/users/1",Some(&f.admin),Some(json!({"role":"viewer","active":false}))).await.0,StatusCode::BAD_REQUEST);
     assert_eq!(send(&f.state,"PATCH",&format!("/admin/users/{}",member.id),Some(&f.admin),Some(json!({"role":"viewer","active":false}))).await.0,StatusCode::OK);

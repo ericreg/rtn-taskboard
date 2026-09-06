@@ -5,7 +5,7 @@ mod media;
 mod settings;
 
 use crate::{error::Error, state::AppState};
-use axum::{Router, extract::{DefaultBodyLimit, Request, State}, http::{HeaderValue, Method, header}, middleware::{self, Next}, response::{IntoResponse, Response}, routing::{get,post,patch,put,delete}};
+use axum::{Router, extract::{DefaultBodyLimit, Request}, http::{HeaderValue, header}, middleware::{self, Next}, response::Response, routing::{get,post,patch,put,delete}};
 use tower_http::trace::TraceLayer;
 
 pub fn router(state: AppState) -> Router {
@@ -49,14 +49,13 @@ pub fn router(state: AppState) -> Router {
         .fallback(|| async { Error::missing() });
     Router::new().nest("/api/v1",api)
         .layer(DefaultBodyLimit::max(1024*1024))
-        .layer(middleware::from_fn_with_state(state.clone(),security))
+        .layer(middleware::from_fn(security))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
-async fn security(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    if !matches!(*request.method(),Method::GET|Method::HEAD|Method::OPTIONS) {
-        if request.headers().get(header::ORIGIN).is_some_and(|h| h.to_str().unwrap_or("") != state.config.base_url) || request.headers().get("sec-fetch-site").is_some_and(|h| h=="cross-site") { return Error::forbidden().into_response(); }
-    }
+async fn security(request: Request, next: Next) -> Response {
+    // Browser-origin checks belong to the enrolled gateway. User authentication,
+    // session-bound CSRF tokens, and permissions are still enforced here.
     let api = request.uri().path().starts_with("/api/");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
