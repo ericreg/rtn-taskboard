@@ -13,3 +13,13 @@ start-backend:
 
 stop-backend:
 	docker compose -f compose.backend.yaml down
+
+join-code:
+	docker compose run --rm backend issue-gateway-code
+
+password:
+	bash -c '
+	read -r -s -p "Editor password (at least 15 characters): " taskboard_password
+	printf "\n" >&2
+	printf "%s\n" "$taskboard_password"
+	' | docker compose run --rm -T backend bootstrap you@company.com "Your Name"
