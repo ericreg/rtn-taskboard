@@ -13,6 +13,14 @@ pub(super) struct DatabaseStorage {
 }
 
 impl DatabaseStorage {
+    /// Stage a new enrollment authority. Nothing is persisted until a new grant
+    /// is saved, so relay/setup failures leave the previous gateway usable.
+    pub(super) async fn replacement(database: &Database) -> anyhow::Result<(Identity, Self)> {
+        let (identity, mut storage) = Self::open(database).await?;
+        storage.initial_state = rtn_mq::generate_host_state();
+        Ok((identity, storage))
+    }
+
     pub(super) async fn open(database: &Database) -> anyhow::Result<(Identity, Self)> {
         let connection = database
             .connect()

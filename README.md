@@ -106,6 +106,7 @@ Taskboard has two roles. Viewers can browse all projects and tasks and manage th
 | Build, seed, and generate a code for a fresh backend | `just init-backend` |
 | Initialize a new backend and first editor | `just seed` |
 | Generate a gateway enrollment code (backend stopped) | `just join-code` |
+| Replace a gateway after losing its key or changing Docker runtime (backend stopped) | `just replace-gateway-code` |
 | Start the backend and follow logs | `just start-backend` |
 | Stop the backend | `just stop-backend` |
 | Build/start the gateway and follow logs | `just start-gateway` |
@@ -308,6 +309,7 @@ docker compose -f compose.backend.yaml start backend
 - **Port 8080 is already in use:** stop the conflicting service or change the gateway listener port in Compose and update `TASKBOARD_GATEWAY_ORIGIN` to match the browser URL. Update `TASKBOARD_BASE_URL` too if generated links should use that URL. Host networking has no separate published/container ports.
 - **Discord stays disconnected:** confirm the bot token, server ID, installation, and outbound connectivity; inspect `docker compose logs backend`.
 - **Gateway repeatedly reconnects or API requests return `503`:** see [Diagnosing disconnects](DEPLOYMENT.md#diagnosing-disconnects). Enable the `rtn_mq=info,iroh=warn,iroh_relay=warn` filters on both hosts so the underlying close/rejection reason is captured. New requests wait up to eight seconds for both tunnel subscriptions; accepted requests are not blindly replayed.
+- **Join reports `queue or memory budget exhausted` after switching to Colima or losing the gateway volume:** this also means a one-use join code was consumed by another gateway key, or the backend's single gateway membership slot is occupied. Docker Desktop and Colima keep separate named volumes. Restore the original gateway key, or follow [Replacing a gateway](DEPLOYMENT.md#replacing-a-gateway) to invalidate the old enrollment and issue a replacement without resetting application data. Adding VM memory or changing bridge/NAT settings cannot free an enrollment slot.
 - **An image cannot be uploaded:** PNG, JPEG, GIF, and WebP are supported. Check `TASKBOARD_MAX_IMAGE_MIB`, the database threshold, and host free space.
 
 ## Development checks and current verification

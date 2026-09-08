@@ -13,6 +13,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args: Vec<String> = std::env::args().collect();
     let config = Config::from_env()?;
+    let issuing_code = args.get(1).map(String::as_str) == Some("issue-gateway-code");
+    let replace_gateway = issuing_code && args.get(2).map(String::as_str) == Some("--replace");
+    if issuing_code {
+        anyhow::ensure!(
+            args.len() == 2 || (replace_gateway && args.len() == 3),
+            "Usage: taskboard issue-gateway-code [--replace]"
+        );
+    }
     if args.get(1).is_some_and(|command| {
         !matches!(
             command.as_str(),
@@ -46,9 +54,14 @@ async fn main() -> anyhow::Result<()> {
         "Database does not exist. Run taskboard seed EMAIL [NAME] with the password on stdin first."
     );
     let state = AppState::new(config).await?;
-    if args.get(1).map(String::as_str) == Some("issue-gateway-code") {
-        let code = taskboard::mesh::issue_gateway_code(&state).await?;
+    if issuing_code {
+        let code = taskboard::mesh::issue_gateway_code(&state, replace_gateway).await?;
         state.db.checkpoint().await?;
+        if replace_gateway {
+            eprintln!(
+                "Previous gateway codes and certificates invalidated. Backend identity and application data preserved."
+            );
+        }
         println!("{code}");
         return Ok(());
     }

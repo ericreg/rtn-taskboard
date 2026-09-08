@@ -158,10 +158,29 @@ async fn seed_rolls_back_editor_if_transport_storage_fails_and_can_be_retried() 
 fn normal_start_and_join_code_require_seed_and_do_not_generate_files() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("taskboard.db");
-    for args in [vec![], vec!["issue-gateway-code"]] {
+    for args in [
+        vec![],
+        vec!["issue-gateway-code"],
+        vec!["issue-gateway-code", "--replace"],
+    ] {
         let output = command(&database, &args, "");
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("taskboard seed"));
+        assert!(!database.exists());
+    }
+}
+
+#[test]
+fn invalid_gateway_replacement_arguments_do_not_open_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("taskboard.db");
+    for args in [
+        vec!["issue-gateway-code", "--replce"],
+        vec!["issue-gateway-code", "--replace", "extra"],
+    ] {
+        let output = command(&database, &args, "");
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
         assert!(!database.exists());
     }
 }

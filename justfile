@@ -16,6 +16,11 @@ prepare-data:
 join-code: prepare-data
     docker compose -f compose.backend.yaml run --rm backend issue-gateway-code
 
+# Replace a lost/migrated gateway; invalidates previous gateway codes/certificates.
+# Stop the backend first. Application data and the backend endpoint key are preserved.
+replace-gateway-code: prepare-data
+    docker compose -f compose.backend.yaml run --rm backend issue-gateway-code --replace
+
 # Seed a new database; prompt for missing email/name and always prompt for the password.
 seed $email="" $name="": prepare-data
     #!/usr/bin/env bash

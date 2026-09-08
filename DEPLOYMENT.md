@@ -140,7 +140,24 @@ When upgrading from backend-wide origin validation, rebuild and recreate both se
 - A connection loss can make the outcome of an in-flight write unknown after the backend accepted its frames. `rtn-mq` prevents message forgery and duplicate frame delivery, but it does not turn Taskboard CRUD operations into a cross-process transaction. Reconcile state before manually repeating a write that ended in `503`.
 - Back up the backend host's `./data` directory, including `taskboard.db` and Turso sidecars. The database contains the backend key and enrollment state. Back up the gateway `/data/rtn` identity independently.
 - Never copy the gateway identity into a second running gateway. The current protocol intentionally supports one global gateway for this code and expects exactly one response recipient.
-- Issuing another code does not revoke an existing gateway certificate. If the gateway private key is suspected compromised, take the deployment offline and rotate the backend `rtn_identity` credentials and gateway identity together before issuing a new code. Preserve the application tables; `seed` deliberately refuses to reset an existing installation.
+- Issuing another ordinary code does not revoke an existing gateway certificate or free its membership slot. Use the replacement procedure below if the original gateway identity is lost or compromised.
+
+### Replacing a gateway
+
+Docker Desktop and Colima have separate volume stores. Moving between them can create a new `/data/rtn/gateway.key` even when the Compose volume name is unchanged. The backend's one-use code still belongs to the old key, and `rtn-mq` currently reports its enrollment limit as `queue or memory budget exhausted`. This rejection can occur over a working relay connection. The Iroh warning `IPv4 address detected by QAD varies by destination` is a separate direct-address probe result; keep `TASKBOARD_RTN_RELAY_ONLY=true` on both services for the default relay-only deployment.
+
+If the original private gateway key is available, move it securely to the new gateway's volume with its private permissions and stop the old gateway. Otherwise, replace its enrollment on the backend host:
+
+```sh
+just stop-backend
+just backend
+just replace-gateway-code
+just start-backend
+```
+
+`just replace-gateway-code` runs `taskboard issue-gateway-code --replace`. It invalidates **all previous gateway join codes and certificates** and frees the single gateway membership slot. It preserves the backend endpoint key, users, sessions, tasks, attachments, and other application data. The new authority and one-use grant are saved together; failure to connect to the relay or save the grant leaves the previous enrollment state intact. Run it only while the backend service is stopped.
+
+On the gateway host, put the printed replacement code into `TASKBOARD_RTN_JOIN_CODE` in `.env`, keep the gateway's current private-key volume, and run `just start-gateway`. Preserve both this code and the gateway volume for future restarts. Do not run `seed` or delete the backend database to replace a gateway.
 
 ### Diagnosing disconnects
 

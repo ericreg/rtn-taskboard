@@ -111,6 +111,8 @@ struct ResponseHead {
 
 pub async fn connect(config: &Config) -> anyhow::Result<(GatewayState, Subscription, JoinCode)> {
     let identity = load_or_create_identity(&config.identity)?;
+    tracing::info!(gateway = %identity.endpoint_id(), backend = %config.join_code.host_id(), relay_only = config.relay_only, "Connecting Taskboard gateway");
+    let mut explained_enrollment_limit = false;
     let endpoint = loop {
         match MessagingEndpoint::join(
             transport_config(config.relay_only),
@@ -121,7 +123,13 @@ pub async fn connect(config: &Config) -> anyhow::Result<(GatewayState, Subscript
         {
             Ok(endpoint) => break endpoint,
             Err(error) => {
-                tracing::warn!(%error, "Taskboard backend unavailable; retrying join");
+                if error == rtn_mq::Error::QueueFull && !explained_enrollment_limit {
+                    tracing::warn!(
+                        "Join limits include consumed one-use codes and the backend's single gateway slot. If the gateway key or Docker runtime changed, restore /data/rtn/gateway.key or run just replace-gateway-code on the stopped backend and update TASKBOARD_RTN_JOIN_CODE. Increasing VM memory does not reset enrollment limits."
+                    );
+                    explained_enrollment_limit = true;
+                }
+                tracing::warn!(%error, "Taskboard gateway could not join; retrying");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
