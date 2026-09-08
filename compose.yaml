@@ -49,7 +49,7 @@ services:
       TASKBOARD_GATEWAY_ORIGIN: ${TASKBOARD_GATEWAY_ORIGIN:-http://localhost:8080}
       TASKBOARD_RTN_IDENTITY: /data/rtn/gateway.key
       TASKBOARD_RTN_RELAY_ONLY: ${TASKBOARD_RTN_RELAY_ONLY:-true}
-      RUST_LOG: ${RUST_LOG:-taskboard_gateway=info,tower_http=info,rtn_mq=info,iroh=warn,iroh_relay=warn}
+      RUST_LOG: ${RUST_LOG:-taskboard_gateway=info,tower_http=info,rtn_mq=info,iroh=debug,iroh_relay=debug}
     volumes:
       - taskboard-gateway-data:/data
     restart: unless-stopped

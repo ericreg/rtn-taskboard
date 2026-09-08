@@ -30,3 +30,7 @@
     .task-panel-open .workspace-footer{gap:12px;flex-wrap:wrap}
   }
 }
+
+.task-row.selected,.board-card.selected{background:color-mix(in srgb,var(--accent-soft) 55%,var(--surface))}
+.task-row.selected{box-shadow:inset 3px 0 var(--accent)}
+.board-card.selected{border-color:var(--accent)}

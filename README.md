@@ -323,4 +323,6 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
+For task-panel browser checks, run `npx playwright install chromium --only-shell` inside `frontend` once, then run `npm --prefix frontend run test:e2e` from the repository root. The suite starts a temporary frontend on port 5174 and uses an isolated test workspace; it does not modify backend data.
+
 The original design is in [TASKBOARD_PLAN.md](TASKBOARD_PLAN.md). This README describes the current container setup and supersedes the plan's earlier proposals for filesystem image storage and automatic backup retention.

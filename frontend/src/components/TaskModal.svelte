@@ -10,18 +10,35 @@
   let dialog: HTMLDialogElement; let data = $state<TaskDetail | null>(null); let loading = $state(untrack(() => !!id)); let busy = $state(false); let error = $state('');
   let title = $state(''); let description = $state(''); let status = $state('todo'); let assignee = $state(''); let due = $state(''); let projectId = $state(initialProject);
   let comment = $state(''); let linkUrl = $state(''); let linkLabel = $state(''); let addingLink = $state(false); let tab = $state('comments');
+  let descriptionUploading = $state(false); let commentUploading = $state(false);
   let savedSnapshot = $state(JSON.stringify(['','','todo','','',initialProject]));
   const dirty = $derived(JSON.stringify([title,description,status,assignee,due,projectId]) !== savedSnapshot);
+  const hasDrafts = $derived(dirty || !!comment.trim() || !!linkUrl.trim() || !!linkLabel.trim());
+  const pending = $derived(busy || descriptionUploading || commentUploading);
   const readOnly = $derived(user.role === 'viewer' || !!(data?.task.archived_at || data?.task.project_archived_at));
   const watching = $derived(data?.watchers.some(w => w.id === user.id) || false);
   async function load(reset = true) {
     if (!id) return; const loaded = await api<TaskDetail>(`/tasks/${id}`); data = loaded;
     if (reset) { title = loaded.task.title; description = loaded.task.description; status = loaded.task.status; assignee = loaded.task.assignee_id ? String(loaded.task.assignee_id) : ''; due = loaded.task.due_date || ''; projectId = String(loaded.task.project_id); savedSnapshot = JSON.stringify([title,description,status,assignee,due,projectId]); }
   }
-  onMount(() => { dialog.showModal(); void load().catch(e => error = errorMessage(e)).finally(() => loading = false); const unload = (e: BeforeUnloadEvent) => { if (dirty || comment.trim()) e.preventDefault(); }; window.addEventListener('beforeunload', unload); return () => window.removeEventListener('beforeunload', unload); });
-  function close() { if (!busy && ((!dirty && !comment.trim()) || confirm('Discard your unsaved changes?'))) onclose(); }
+  onMount(() => {
+    const mobile = matchMedia('(max-width: 760px)');
+    const show = () => { if (dialog.open) dialog.close(); if (mobile.matches) dialog.showModal(); else dialog.show(); };
+    show();
+    mobile.addEventListener('change', show);
+    void load().catch(e => error = errorMessage(e)).finally(() => loading = false);
+    const unload = (e: BeforeUnloadEvent) => { if (hasDrafts || pending) e.preventDefault(); };
+    const keyboard = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented && !mobile.matches && !document.querySelector('dialog:modal')) { e.preventDefault(); close(); }
+    };
+    window.addEventListener('beforeunload', unload);
+    window.addEventListener('keydown', keyboard);
+    return () => { mobile.removeEventListener('change', show); window.removeEventListener('beforeunload', unload); window.removeEventListener('keydown', keyboard); };
+  });
+  export function canLeave() { return !pending && (!hasDrafts || confirm('Discard your unsaved changes?')); }
+  function close() { if (canLeave()) onclose(); }
   async function save(e: SubmitEvent) {
-    e.preventDefault(); if (readOnly) return; busy = true; error = '';
+    e.preventDefault(); if (readOnly || pending) return; busy = true; error = '';
     try { const task = await api<Task>(id ? `/tasks/${id}` : `/projects/${projectId}/tasks`, id ? 'PATCH' : 'POST', { title, description, status, assignee_id: assignee ? Number(assignee) : null, due_date: due || null, version: data?.task.version }); if (id) await load(); savedSnapshot = JSON.stringify([title,description,status,assignee,due,projectId]); onsaved(task, !id); }
     catch (e) { error = errorMessage(e); } finally { busy = false; }
   }
@@ -54,8 +71,8 @@
       </div>
       {#if due}<p class="field-hint">Due at the end of {due} in {data?.task.due_timezone || user.timezone}. The deadline is stored as a UTC instant.</p>{/if}
       <div class="section-label">Description</div>
-      {#if readOnly}{#if description}<Markdown value={description}/>{:else}<p class="muted">No description added.</p>{/if}{:else}<MarkdownEditor bind:value={description} uploadTo={id ? `/tasks/${id}/attachments` : undefined} onuploaded={() => void load(false).catch(e => error = errorMessage(e))}/>{/if}
-      {#if !readOnly}<div class="task-save-row"><span class="field-hint">{dirty ? 'You have unsaved changes' : id ? 'All changes saved' : 'Keep it simple. Add more detail later.'}</span><button type="submit" class="button primary" disabled={busy || (id !== null && !dirty)}>{busy ? 'Saving…' : id ? 'Save changes' : 'Create task'}</button></div>{/if}
+      {#if readOnly}{#if description}<Markdown value={description}/>{:else}<p class="muted">No description added.</p>{/if}{:else}<MarkdownEditor bind:uploading={descriptionUploading} bind:value={description} uploadTo={id ? `/tasks/${id}/attachments` : undefined} onuploaded={() => void load(false).catch(e => error = errorMessage(e))}/>{/if}
+      {#if !readOnly}<div class="task-save-row"><span class="field-hint">{dirty ? 'You have unsaved changes' : id ? 'All changes saved' : 'Keep it simple. Add more detail later.'}</span><button type="submit" class="button primary" disabled={pending || (id !== null && !dirty)}>{busy ? 'Saving…' : id ? 'Save changes' : 'Create task'}</button></div>{/if}
     </form>
     {#if data}
       <div class="task-secondary-actions"><button class="button subtle" disabled={busy || (!!(data.task.archived_at || data.task.project_archived_at) && !watching)} onclick={toggleWatch}>{#if watching}<EyeOff size={15}/>Unwatch{:else}<Eye size={15}/>Watch task{/if}</button><span class="field-hint">{data.watchers.length} {data.watchers.length === 1 ? 'watcher' : 'watchers'}</span><div class="spacer"></div>
@@ -70,7 +87,7 @@
       </section>
       <section class="discussion"><div class="tabs"><button class:active={tab === 'comments'} onclick={() => tab = 'comments'}><MessageSquare size={15}/>Comments<span class="count">{data.comments.length}</span></button><button class:active={tab === 'activity'} onclick={() => tab = 'activity'}><ActivityIcon size={15}/>Activity</button></div>
         {#if tab === 'comments'}<div class="comments">{#each data.comments as item}<article class="comment"><div class="avatar small">{initials(item.author_name)}</div><div class="comment-content"><div class="comment-byline"><strong>{item.author_name}</strong><time>{timestamp(item.created_at, user.timezone)}</time></div><Markdown value={item.body}/></div></article>{:else}<p class="empty-discussion">A little context goes a long way. Start the conversation.</p>{/each}</div>
-          {#if !readOnly}<form onsubmit={addComment}><MarkdownEditor bind:value={comment} label="Comment" placeholder="Share an update or ask a question…" compact uploadTo={`/tasks/${id}/attachments`} onuploaded={() => void load(false).catch(e => error = errorMessage(e))}/><div class="task-save-row"><span></span><button class="button secondary" disabled={busy || !comment.trim()}>Post comment</button></div></form>{/if}
+          {#if !readOnly}<form onsubmit={addComment}><MarkdownEditor bind:uploading={commentUploading} bind:value={comment} label="Comment" placeholder="Share an update or ask a question…" compact uploadTo={`/tasks/${id}/attachments`} onuploaded={() => void load(false).catch(e => error = errorMessage(e))}/><div class="task-save-row"><span></span><button class="button secondary" disabled={busy || !comment.trim()}>Post comment</button></div></form>{/if}
         {:else}<ol class="activity-list">{#each data.activity as item}<li><span class="activity-dot"></span><div><strong>{item.actor_name}</strong> {item.detail}<small>{timestamp(item.created_at, user.timezone)}{item.source === 'discord' ? ' · via Discord' : ''}</small></div></li>{/each}</ol>{/if}
       </section>
     {/if}
@@ -80,6 +97,7 @@
 <style>
   .task-panel {
     position: fixed;
+    z-index: 101;
     inset: 0 0 0 auto;
     margin: 0;
     width: var(--task-panel-width);

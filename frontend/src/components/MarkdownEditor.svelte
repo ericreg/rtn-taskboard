@@ -3,8 +3,8 @@
   import Markdown from './Markdown.svelte';
   import { api, errorMessage } from '../lib/api';
   import type { Attachment } from '../lib/types';
-  let { value = $bindable(''), label = 'Description', placeholder = 'Add context, a checklist, or a little code…', uploadTo, onuploaded, compact = false }: { value?: string; label?: string; placeholder?: string; uploadTo?: string; onuploaded?: () => void; compact?: boolean } = $props();
-  let preview = $state(false); let uploading = $state(false); let error = $state('');
+  let { value = $bindable(''), uploading = $bindable(false), label = 'Description', placeholder = 'Add context, a checklist, or a little code…', uploadTo, onuploaded, compact = false }: { value?: string; uploading?: boolean; label?: string; placeholder?: string; uploadTo?: string; onuploaded?: () => void; compact?: boolean } = $props();
+  let preview = $state(false); let error = $state('');
   let textarea = $state<HTMLTextAreaElement>(); let fileInput: HTMLInputElement;
   const id = $props.id();
   function insert(before: string, after = '') { const start = textarea?.selectionStart ?? value.length; const end = textarea?.selectionEnd ?? start; const selected = value.slice(start, end); value = value.slice(0, start) + before + selected + after + value.slice(end); textarea?.focus(); }
