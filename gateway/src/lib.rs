@@ -76,7 +76,7 @@ impl Config {
             frontend: get("TASKBOARD_FRONTEND", "frontend/dist").into(),
             identity: get("TASKBOARD_RTN_IDENTITY", "data/rtn/gateway.key").into(),
             join_code: JoinCode::decode(encoded.trim()).context("decode Taskboard join code")?,
-            relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "true")
+            relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "false")
                 .parse()
                 .context("Invalid TASKBOARD_RTN_RELAY_ONLY")?,
         })

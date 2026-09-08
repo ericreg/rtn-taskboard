@@ -3,7 +3,7 @@
 Taskboard uses the public container as a native `rtn-mq` gateway. This is not WebAssembly: the browser talks normal same-origin HTTP to the gateway, and the gateway talks to the private backend through Iroh.
 
 ```text
-browser --HTTPS--> gateway container --signed rtn-mq / Iroh relay--> backend container --> Turso
+browser --HTTPS--> gateway container --signed rtn-mq / Iroh--> backend container --> Turso
                     public DNS + TLS                                  no HTTP listener
 ```
 
@@ -57,9 +57,15 @@ export TASKBOARD_UID="$(id -u)" TASKBOARD_GID="$(id -g)"
 
 Compose requires these values rather than silently falling back to another user. Existing storage, including a gateway volume created from a registry image with different IDs, needs matching ownership; see [Changing the container user](README.md#changing-the-container-user). Normal services remain non-root when invoked by a non-root user.
 
-All three Compose files use `network_mode: host`. On Linux, services and `docker compose run` commands share the host network namespace, avoiding the Compose bridge and its embedded DNS. Docker Desktop 4.34 or later requires **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)). Relay-only Iroh transport remains enabled by default.
+All three Compose files use `network_mode: host`. On Linux, services and `docker compose run` commands share the host network namespace, avoiding the Compose bridge and its embedded DNS. Docker Desktop 4.34 or later requires **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)). Direct Iroh connections with automatic relay fallback are enabled by default.
 
 The gateway binds directly to `${TASKBOARD_PUBLISH_ADDRESS}:8080`, with `127.0.0.1` as the default address. There are no Docker port mappings; port 8080 must be free on the gateway host. After changing an existing deployment to host networking, apply it with `docker compose up -d --force-recreate` (use the relevant `-f` option for a split deployment). A container restart alone does not apply networking changes, and no image rebuild is needed.
+
+### Direct connections and relay fallback
+
+Keep `TASKBOARD_RTN_RELAY_ONLY=false` on **both** hosts. Iroh uses its default relays for discovery and initial connectivity, then moves traffic to a direct UDP path when one is reachable. If direct connectivity is unavailable or lost, the relay remains available as a fallback ([Iroh relay behavior](https://docs.iroh.computer/concepts/relays)). `true` is an explicit opt-in to force relay-only transport.
+
+Existing `.env` values override the defaults. After changing this setting, recreate the appropriate service with `docker compose -f compose.backend.yaml up -d backend` or `docker compose -f compose.gateway.yaml up -d gateway`. Keep the existing join code and identity; changing transport does not require re-enrollment with a new key or code.
 
 ## 1. Prepare the backend server
 
@@ -70,7 +76,7 @@ TASKBOARD_BASE_URL=https://tasks.example.com
 TASKBOARD_SECURE_COOKIES=true
 TASKBOARD_MAX_DB_GIB=0
 TASKBOARD_MAX_IMAGE_MIB=10
-TASKBOARD_RTN_RELAY_ONLY=true
+TASKBOARD_RTN_RELAY_ONLY=false
 ```
 
 The backend bind-mounts `./data:/data`, so its database is stored at `./data/taskboard.db` on this host and owned by your user. The backend recipes prepare this directory automatically. For a new installation using Compose directly, create it as your user before running backend commands:
@@ -102,7 +108,7 @@ Keep the printed `rtn-mq://join/...` value private. Issuing a code requires rela
 
 `just start-backend` uses the image built by `just backend` and follows the backend logs. Press `Ctrl+C` to stop following logs; the service keeps running.
 
-There is deliberately no `ports` entry and no HTTP listener inside the backend container. API requests can reach its in-process router only after arriving as authenticated tunnel frames. `TASKBOARD_RTN_RELAY_ONLY=true` also prevents Iroh from accepting a direct-IP data path.
+There is deliberately no `ports` entry and no HTTP listener inside the backend container. API requests can reach its in-process router only after arriving as authenticated tunnel frames. `TASKBOARD_RTN_RELAY_ONLY=false` enables direct UDP transport while retaining the default Iroh relays for discovery and fallback.
 
 ## 2. Prepare the gateway host
 
@@ -111,7 +117,7 @@ Create its `.env` with the code printed by the backend and the origin users will
 ```dotenv
 TASKBOARD_PUBLISH_ADDRESS=127.0.0.1
 TASKBOARD_GATEWAY_ORIGIN=https://tasks.example.com
-TASKBOARD_RTN_RELAY_ONLY=true
+TASKBOARD_RTN_RELAY_ONLY=false
 TASKBOARD_RTN_JOIN_CODE=rtn-mq://join/REPLACE_ME
 ```
 
@@ -134,7 +140,7 @@ When upgrading from backend-wide origin validation, rebuild and recreate both se
 
 ## Recovery and operations
 
-- Both processes reconnect outbound through the relay. The gateway explicitly re-enrolls its same persisted identity after a backend restart; this does not consume another code use.
+- Both processes prefer direct connections and use a relay when a direct path is unavailable. The gateway explicitly re-enrolls its same persisted identity after a backend restart; this does not consume another code use.
 - Gateway readiness requires both tunnel topic subscriptions, not just a connected peer. A new API request waits up to eight seconds for subscriptions to recover, then returns `503` if they are still unavailable. Static assets remain available. The existing concurrency limit also bounds requests waiting for recovery.
 - The gateway only retries a request-start publication when `rtn-mq` explicitly reports that no subscriber accepted it. Once a publication is accepted, acknowledgement failures do not trigger a fresh HTTP request or replay; the messaging layer retains its existing delivery semantics.
 - A connection loss can make the outcome of an in-flight write unknown after the backend accepted its frames. `rtn-mq` prevents message forgery and duplicate frame delivery, but it does not turn Taskboard CRUD operations into a cross-process transaction. Reconcile state before manually repeating a write that ended in `503`.
@@ -144,7 +150,7 @@ When upgrading from backend-wide origin validation, rebuild and recreate both se
 
 ### Replacing a gateway
 
-Docker Desktop and Colima have separate volume stores. Moving between them can create a new `/data/rtn/gateway.key` even when the Compose volume name is unchanged. The backend's one-use code still belongs to the old key, and `rtn-mq` currently reports its enrollment limit as `queue or memory budget exhausted`. This rejection can occur over a working relay connection. The Iroh warning `IPv4 address detected by QAD varies by destination` is a separate direct-address probe result; keep `TASKBOARD_RTN_RELAY_ONLY=true` on both services for the default relay-only deployment.
+Docker Desktop and Colima have separate volume stores. Moving between them can create a new `/data/rtn/gateway.key` even when the Compose volume name is unchanged. The backend's one-use code still belongs to the old key, and `rtn-mq` currently reports its enrollment limit as `queue or memory budget exhausted`. This rejection can occur over a working relay connection. The Iroh warning `IPv4 address detected by QAD varies by destination` is a separate direct-address probe result and does not mean enrollment failed. Keep `TASKBOARD_RTN_RELAY_ONLY=false` on both services to permit direct connections with relay fallback.
 
 If the original private gateway key is available, move it securely to the new gateway's volume with its private permissions and stop the old gateway. Otherwise, replace its enrollment on the backend host:
 
@@ -184,4 +190,4 @@ Look for the earliest transport/protocol error preceding `messaging peer removed
 
 ## Local two-container deployment
 
-`compose.yaml` runs both roles with host networking on one Docker host and defaults to relay-only transport. Follow the README quick start. Application traffic still crosses the authenticated Iroh relay tunnel; the backend has no HTTP listener, and neither service uses Docker port mappings.
+`compose.yaml` runs both roles with host networking on one Docker host and defaults to direct connections with relay fallback. Follow the README quick start. Application traffic still crosses the authenticated Iroh tunnel; the backend has no HTTP listener, and neither service uses Docker port mappings.

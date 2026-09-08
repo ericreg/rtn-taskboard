@@ -5,7 +5,7 @@ A self-hosted project management app built with Svelte, TypeScript, Rust, [Turso
 - The public **gateway** serves the compiled frontend and forwards same-origin `/api/v1` requests.
 - The private **backend** owns Turso, authorization, jobs, and the optional Discord bot. It has no HTTP listener or published port.
 
-The containers exchange signed, acknowledged, streaming frames over an Iroh relay. The browser uses ordinary HTTPS, cookies, and CSRF protection; it never receives the join code or an Iroh key. See [Split deployment](DEPLOYMENT.md) for the remote-server setup and security model.
+The containers exchange signed, acknowledged, streaming frames over Iroh, preferring direct connections with relay fallback. The browser uses ordinary HTTPS, cookies, and CSRF protection; it never receives the join code or an Iroh key. See [Split deployment](DEPLOYMENT.md) for the remote-server setup and security model.
 
 ## Breaking storage change
 
@@ -21,7 +21,7 @@ Keep both checkouts up to date. This version requires the `rtn-mq` application s
 
 All Compose configurations use `network_mode: host`, including one-off backend commands. On Linux, containers share the host network namespace instead of using a Compose bridge and its embedded DNS. On Docker Desktop 4.34 or later, first enable **Settings → Resources → Network → Enable host networking** ([Docker documentation](https://docs.docker.com/engine/network/drivers/host/)).
 
-The gateway binds directly to `127.0.0.1:8080` by default; port 8080 must be free on the host. There are no Docker port mappings. `TASKBOARD_PUBLISH_ADDRESS` controls the gateway's bind address, and relay-only transport remains enabled by default.
+The gateway binds directly to `127.0.0.1:8080` by default; port 8080 must be free on the host. There are no Docker port mappings. `TASKBOARD_PUBLISH_ADDRESS` controls the gateway's bind address, and Iroh prefers direct connections with relay fallback by default.
 
 ### 1. Create your configuration
 
@@ -137,7 +137,7 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | `TASKBOARD_PUBLISH_ADDRESS` | `127.0.0.1` | Gateway HTTP bind address in host-networked Compose; set `0.0.0.0` for LAN access |
 | `TASKBOARD_RTN_JOIN_CODE` | Required by gateway | One-use enrollment secret; it never enters browser assets |
 | `TASKBOARD_RTN_JOIN_CODE_FILE` | Empty | Alternative file containing the join code, useful with a mounted secret |
-| `TASKBOARD_RTN_RELAY_ONLY` | `true` | Disables all direct-IP Iroh transport; use the configured/default relay only |
+| `TASKBOARD_RTN_RELAY_ONLY` | `false` | Prefer direct Iroh connections with automatic relay fallback; `true` explicitly forces relay-only transport |
 | `TASKBOARD_MAX_DB_GIB` | `0` | Initial database content threshold in whole GiB; `0` means unlimited |
 | `TASKBOARD_MAX_IMAGE_MIB` | `10` | Maximum size of one uploaded image in whole MiB; must be greater than zero |
 | `TASKBOARD_DISCORD_TOKEN` | Empty | Optional Discord bot token |
@@ -160,7 +160,7 @@ TASKBOARD_BASE_URL=https://tasks.example.com
 TASKBOARD_SECURE_COOKIES=true
 ```
 
-The DNS and TLS configuration is only for browsers reaching the gateway. The backend needs outbound relay access but no public IP, DNS record, inbound port, Docker port mapping, or firewall rule. Browser-origin validation happens at the gateway against `TASKBOARD_GATEWAY_ORIGIN`, before requests enter the tunnel. `TASKBOARD_BASE_URL` is only for generated links and does not need to match the gateway origin for login or writes to work. The backend still enforces user sessions, CSRF tokens, and permissions.
+The DNS and TLS configuration is only for browsers reaching the gateway. The backend uses direct UDP when reachable and needs outbound relay access for discovery and fallback. It requires no public HTTP listener, DNS record, or Docker port mapping. Browser-origin validation happens at the gateway against `TASKBOARD_GATEWAY_ORIGIN`, before requests enter the tunnel. `TASKBOARD_BASE_URL` is only for generated links and does not need to match the gateway origin for login or writes to work. The backend still enforces user sessions, CSRF tokens, and permissions.
 
 When upgrading, set `TASKBOARD_GATEWAY_ORIGIN` explicitly if you use anything other than `http://localhost:8080`, then rebuild and recreate both services using their respective Compose files. The gateway does not inherit `TASKBOARD_BASE_URL`. For example, opening `http://127.0.0.1:8080` requires `TASKBOARD_GATEWAY_ORIGIN=http://127.0.0.1:8080` on the gateway machine only. No new join code is needed.
 

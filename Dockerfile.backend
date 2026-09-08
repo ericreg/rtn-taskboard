@@ -29,6 +29,6 @@ COPY --from=builder --chown=${TASKBOARD_UID}:${TASKBOARD_GID} /runtime/tmp /tmp
 USER ${TASKBOARD_UID}:${TASKBOARD_GID}
 ENV TASKBOARD_DATABASE=/data/taskboard.db \
     TASKBOARD_MAX_IMAGE_MIB=10 \
-    TASKBOARD_RTN_RELAY_ONLY=true
+    TASKBOARD_RTN_RELAY_ONLY=false
 VOLUME ["/data"]
 ENTRYPOINT ["/taskboard"]

@@ -79,7 +79,7 @@ impl Config {
             base_url,
             discord_token: token,
             discord_guild: guild,
-            rtn_relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "true")
+            rtn_relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "false")
                 .parse()
                 .context("Invalid TASKBOARD_RTN_RELAY_ONLY")?,
         })
