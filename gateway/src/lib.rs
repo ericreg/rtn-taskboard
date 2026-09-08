@@ -49,6 +49,7 @@ pub struct Config {
     pub browser_origin: BrowserOrigin,
     pub frontend: PathBuf,
     pub identity: PathBuf,
+    pub identity_secret: Option<Identity>,
     pub join_code: JoinCode,
     pub relay_only: bool,
 }
@@ -66,6 +67,13 @@ impl Config {
                 std::fs::read_to_string(path).context("read Taskboard join-code file")?
             }
         };
+        let identity_secret = match std::env::var("TASKBOARD_RTN_IDENTITY_HEX") {
+            Ok(value) => Some(parse_identity_secret(&value)?),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("TASKBOARD_RTN_IDENTITY_HEX must contain exactly 64 hexadecimal characters")
+            }
+        };
         Ok(Self {
             bind: get("TASKBOARD_GATEWAY_BIND", "0.0.0.0:8080"),
             browser_origin: BrowserOrigin::parse(&get(
@@ -75,6 +83,7 @@ impl Config {
             .context("Invalid TASKBOARD_GATEWAY_ORIGIN")?,
             frontend: get("TASKBOARD_FRONTEND", "frontend/dist").into(),
             identity: get("TASKBOARD_RTN_IDENTITY", "data/rtn/gateway.key").into(),
+            identity_secret,
             join_code: JoinCode::decode(encoded.trim()).context("decode Taskboard join code")?,
             relay_only: get("TASKBOARD_RTN_RELAY_ONLY", "false")
                 .parse()
@@ -110,7 +119,7 @@ struct ResponseHead {
 }
 
 pub async fn connect(config: &Config) -> anyhow::Result<(GatewayState, Subscription, JoinCode)> {
-    let identity = load_or_create_identity(&config.identity)?;
+    let identity = load_gateway_identity(&config.identity, config.identity_secret.as_ref())?;
     tracing::info!(gateway = %identity.endpoint_id(), backend = %config.join_code.host_id(), relay_only = config.relay_only, "Connecting Taskboard gateway");
     let mut explained_enrollment_limit = false;
     let endpoint = loop {
@@ -601,7 +610,26 @@ fn transport_config(relay_only: bool) -> rtn_mq::Config {
     config
 }
 
-fn load_or_create_identity(path: &Path) -> anyhow::Result<Identity> {
+fn parse_identity_secret(value: &str) -> anyhow::Result<Identity> {
+    const INVALID: &str =
+        "TASKBOARD_RTN_IDENTITY_HEX must contain exactly 64 hexadecimal characters";
+    let value = value.trim();
+    ensure!(value.len() == 64, INVALID);
+    let mut bytes = [0u8; 32];
+    for (byte, pair) in bytes.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        *byte = std::str::from_utf8(pair)
+            .ok()
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            .context(INVALID)?;
+    }
+    Ok(Identity::from_bytes(&bytes))
+}
+
+fn load_gateway_identity(path: &Path, secret: Option<&Identity>) -> anyhow::Result<Identity> {
+    // A configured secret is authoritative and never depends on ephemeral files.
+    if let Some(identity) = secret {
+        return Ok(identity.clone());
+    }
     if path.exists() {
         return Identity::load(path).context("load gateway rtn-mq identity");
     }
@@ -639,6 +667,87 @@ mod tests {
     use serde_json::{Value, json};
     use taskboard::{auth, config::Config as BackendConfig, state::AppState};
     use tower::ServiceExt;
+
+    #[test]
+    fn configured_identity_ignores_ephemeral_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway.key");
+        std::fs::write(&path, b"stale or invalid ephemeral key").unwrap();
+        let encoded = "a1".repeat(32);
+        let identity = parse_identity_secret(&format!("  {}\n", encoded.to_uppercase())).unwrap();
+        let first = load_gateway_identity(&path, Some(&identity)).unwrap();
+        assert_eq!(first.to_bytes(), [0xa1; 32]);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"stale or invalid ephemeral key"
+        );
+        std::fs::remove_file(&path).unwrap();
+        let restored = parse_identity_secret(&encoded).unwrap();
+        let second = load_gateway_identity(&path, Some(&restored)).unwrap();
+        assert_eq!(first.endpoint_id(), second.endpoint_id());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn malformed_identity_secrets_are_rejected_without_echoing_them() {
+        for value in [
+            "".into(),
+            " ".into(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "gh".repeat(32),
+            "é".repeat(32),
+        ] {
+            let error = parse_identity_secret(&value).unwrap_err().to_string();
+            assert_eq!(
+                error,
+                "TASKBOARD_RTN_IDENTITY_HEX must contain exactly 64 hexadecimal characters"
+            );
+        }
+    }
+
+    #[test]
+    fn file_identity_still_persists_without_a_secret() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private/gateway.key");
+        let first = load_gateway_identity(&path, None).unwrap();
+        let second = load_gateway_identity(&path, None).unwrap();
+        assert_eq!(first.endpoint_id(), second.endpoint_id());
+    }
+
+    #[tokio::test]
+    async fn configured_identity_rejoins_with_a_consumed_one_use_code() {
+        let host = MessagingEndpoint::host(
+            local_transport(),
+            Identity::generate(),
+            vec![
+                Permission::subscribe(REQUEST_TOPIC).unwrap(),
+                Permission::publish(RESPONSE_TOPIC).unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+        let mut options = JoinOptions::new(vec![
+            Permission::publish(REQUEST_TOPIC).unwrap(),
+            Permission::subscribe(RESPONSE_TOPIC).unwrap(),
+        ]);
+        options.max_uses = 1;
+        let code = host.issue_join_code(options).await.unwrap();
+        let encoded = "b2".repeat(32);
+        let identity = parse_identity_secret(&encoded).unwrap();
+        let expected = identity.endpoint_id();
+        let first = MessagingEndpoint::join(local_transport(), identity, &code)
+            .await
+            .unwrap();
+        first.shutdown(ShutdownMode::Immediate).await.unwrap();
+        let restored = parse_identity_secret(&encoded).unwrap();
+        let second = MessagingEndpoint::join(local_transport(), restored, &code)
+            .await
+            .unwrap();
+        assert_eq!(second.endpoint_id(), expected);
+        second.shutdown(ShutdownMode::Immediate).await.unwrap();
+        host.shutdown(ShutdownMode::Immediate).await.unwrap();
+    }
 
     #[test]
     fn strips_hop_by_hop_headers() {

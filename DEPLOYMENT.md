@@ -132,6 +132,16 @@ docker compose -f compose.gateway.yaml logs -f gateway
 
 Keep `taskboard-gateway-data`. Its private key is the identity that consumed the join code. Recreating only the container is safe; deleting this volume produces a new identity that the already-consumed code correctly rejects.
 
+For hosts with ephemeral storage, the gateway also accepts
+`TASKBOARD_RTN_IDENTITY_HEX`: the same 32-byte private key encoded as 64 hexadecimal
+characters and supplied through a runtime secret manager. When present, this key
+overrides `TASKBOARD_RTN_IDENTITY`; the gateway does not read or write an identity
+file. Empty or malformed secrets fail startup instead of generating a new key.
+Preserve both the secret and its matching join code across deployments. Keep the
+private key out of source control and image builds, and run only one instance
+with that identity. This option is supported when running the gateway image
+directly; the existing Compose files continue to use their identity volume.
+
 Configure the existing TLS reverse proxy to send `https://tasks.example.com` to `127.0.0.1:8080`. If the gateway container itself should be LAN-accessible, change `TASKBOARD_PUBLISH_ADDRESS`, but this has no effect on backend networking.
 
 For local HTTP instead, set `TASKBOARD_GATEWAY_ORIGIN=http://localhost:8080` (the default) or `http://127.0.0.1:8080`, matching the address you actually open, and use `TASKBOARD_SECURE_COOKIES=false` on the backend. The backend link URL can differ without blocking login or writes.

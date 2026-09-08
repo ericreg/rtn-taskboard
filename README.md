@@ -144,6 +144,7 @@ Compose reads `.env` for interpolation and passes only the explicitly listed val
 | `TASKBOARD_DISCORD_GUILD_ID` | Empty | Company Discord server ID; required when a bot token is supplied |
 | `TASKBOARD_DATABASE` | `/data/taskboard.db` in the image | Turso database path |
 | `TASKBOARD_RTN_IDENTITY` | `/data/rtn/gateway.key` in the gateway image | Gateway-only private endpoint key; backend key and enrollment state live in Turso |
+| `TASKBOARD_RTN_IDENTITY_HEX` | unset | Optional gateway private key as 64 hexadecimal characters, provided through a runtime secret manager; overrides the identity file and preserves identity on ephemeral hosts |
 | `TASKBOARD_GATEWAY_BIND` | `127.0.0.1:8080` in Compose; `0.0.0.0:8080` in the image | Gateway HTTP listener; Compose derives this from `TASKBOARD_PUBLISH_ADDRESS` and port 8080 |
 | `RUST_LOG` | See `.env.example` | Application logging filter |
 
